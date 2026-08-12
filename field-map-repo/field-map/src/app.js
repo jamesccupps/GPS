@@ -177,8 +177,19 @@ const MaineHS = CachedTiles.extend({
 /* ══════════════════════════════════════════════════════════════
    5. MAP
    ══════════════════════════════════════════════════════════════ */
+/* Opening view comes from the parcel, not a literal. A locked copy is published
+   to a public URL with the geometry encrypted, and a hardcoded setView would
+   hand back the location to about 30 ft regardless. Zoom stays 16. */
+function homeView(){
+  const f=PARCEL.features.find(x=>x.properties.style==='p1');
+  const ring=f&&f.geometry.coordinates[0];
+  if(!ring||!ring.length) return [0,0];
+  let w=Infinity,e=-Infinity,s=Infinity,n=-Infinity;
+  for(const c of ring){ if(c[0]<w)w=c[0]; if(c[0]>e)e=c[0]; if(c[1]<s)s=c[1]; if(c[1]>n)n=c[1]; }
+  return [(s+n)/2, (w+e)/2];
+}
 const map=L.map('map',{zoomControl:false, rotate:true, touchRotate:true, bearing:0, rotateControl:false,
-  preferCanvas:true}).setView([44.0016,-70.2115],16);
+  preferCanvas:true}).setView(homeView(),16);
 L.control.scale({imperial:true,metric:false,position:'bottomleft'}).addTo(map);
 const canvasR = L.canvas({padding:0.5});   /* 5,762 vertices — canvas, not 17 SVG paths */
 

@@ -46,11 +46,21 @@ apart.
 **What locking does and does not hide.** The parcel geometry, corner and
 monument names, deed references and the abutter's name are all encrypted, and
 the app does not execute before unlock — `PARCEL_RAW` is `null` and
-`window.__PARCEL__` is undefined at the gate. But `src/app.js` opens the map on
-a hardcoded `setView([44.0016,-70.2115], 16)`, and that line ships in the clear.
-A stranger who views source on the locked file gets the parcel's location to
-about 30 ft. They do not get the boundary, the corners, or anything from the
-deed.
+`window.__PARCEL__` is undefined at the gate.
+
+`src/app.js` used to open the map on a hardcoded `setView([44.0016,-70.2115])`,
+which shipped in the clear and gave up the location to about 30 ft no matter
+how well the geometry was encrypted. `homeView()` now derives the opening
+centre from the `p1` polygon after unlock, so nothing parcel-specific survives.
+The only coordinates left in a locked file are `lat0` and `lon0` in the
+projection — the Maine West State Plane origin and central meridian, which are
+public constants for a zone covering most of western Maine.
+
+Worth re-running that scan if you touch the projection or the map setup:
+
+```bash
+grep -nE "(4[34]\.[0-9]{3,}|-7[01]\.[0-9]{3,})" _site/index.html
+```
 
 Locking the Pages build also only helps if the repo itself is not carrying the
 same data in the open. `data/parcel-source.kml` and `data/parcel.geojson` are
