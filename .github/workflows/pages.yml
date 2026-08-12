@@ -1,0 +1,70 @@
+name: Deploy field map to Pages
+
+# Publishes field-map-repo/field-map to GitHub Pages, with the parcel encrypted
+# into the file. The Pages site is public whether or not the repo is, so the
+# unlocked build never leaves the runner: scripts/lock.py refuses to write
+# anything if FIELDMAP_PASSPHRASE is unset, which makes a missing secret a
+# failed deploy rather than a published parcel.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'field-map-repo/field-map/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: field-map-repo/field-map
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # build.py --check shells out to `node --check` to prove the payload parses
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install the one build-time dependency
+        run: pip install cryptography
+
+      - name: Build and check
+        run: python3 scripts/build.py --check
+
+      - name: Lock the parcel into the published copy
+        env:
+          FIELDMAP_PASSPHRASE: ${{ secrets.FIELDMAP_PASSPHRASE }}
+        run: |
+          python3 scripts/lock.py dist/field-map.html -o _site/index.html --verify
+          cp dist/sw.js _site/sw.js
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          # relative to the workspace, not to defaults.run.working-directory
+          path: field-map-repo/field-map/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

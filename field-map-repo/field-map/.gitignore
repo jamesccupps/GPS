@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 addon/field_map/rootfs/app/static/
 .DS_Store
+_site/

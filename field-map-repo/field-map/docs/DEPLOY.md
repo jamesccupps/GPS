@@ -20,14 +20,42 @@ Endpoints: `GET /` (app), `GET /api/health` (backend probe),
 
 ## GitHub Pages
 
-`dist/field-map.html` and `dist/sw.js` in the same folder.
+Automated by `.github/workflows/pages.yml` on push to `main`: build, lock,
+deploy. Two things have to be set up once, in the repo settings:
 
-A Pages site is public even when the repo is private. To publish without
-exposing the parcel: **Map → Backup & privacy → Lock a copy with a passphrase**,
-then upload the locked file and keep the unlocked one local. AES-256-GCM,
-PBKDF2-SHA256 at 310,000 iterations. Verified that no coordinates, names or deed
-references survive in the locked file, and the app does not execute before
-unlock.
+1. **Settings → Pages → Source: GitHub Actions**
+2. **Settings → Secrets and variables → Actions → `FIELDMAP_PASSPHRASE`**
+
+The workflow publishes `_site/index.html` (the locked build) and `_site/sw.js`.
+It never publishes `dist/field-map.html`, which is unlocked. If the secret is
+missing, `scripts/lock.py` exits non-zero and the deploy fails rather than
+putting the parcel on a public URL.
+
+To lock a copy by hand instead — for a one-off, or to check the CI output —
+either **Map → Backup & privacy → Lock a copy with a passphrase** in the app, or:
+
+```bash
+FIELDMAP_PASSPHRASE=... python3 scripts/lock.py dist/field-map.html     -o _site/index.html --verify
+```
+
+Both produce the same format: AES-256-GCM, PBKDF2-SHA256 at 310,000 iterations,
+16-byte salt, 12-byte IV. `--verify` decrypts the result and compares it against
+`data/parcel.geojson`, which is what catches the two implementations drifting
+apart.
+
+**What locking does and does not hide.** The parcel geometry, corner and
+monument names, deed references and the abutter's name are all encrypted, and
+the app does not execute before unlock — `PARCEL_RAW` is `null` and
+`window.__PARCEL__` is undefined at the gate. But `src/app.js` opens the map on
+a hardcoded `setView([44.0016,-70.2115], 16)`, and that line ships in the clear.
+A stranger who views source on the locked file gets the parcel's location to
+about 30 ft. They do not get the boundary, the corners, or anything from the
+deed.
+
+Locking the Pages build also only helps if the repo itself is not carrying the
+same data in the open. `data/parcel-source.kml` and `data/parcel.geojson` are
+committed unencrypted, so on a public repo the lock protects the published URL
+and nothing else.
 
 For sync, create a fine-grained token scoped to that one repo with
 **Contents: read and write** and an expiry. The app reads owner and repo from
