@@ -235,6 +235,26 @@ const STY={
  pob:{color:'#5BE58B',r:8,label:'Point of beginning'}
 };
 const groups={}; Object.keys(STY).forEach(k=>groups[k]=L.layerGroup());
+
+/* Leaflet stroke weight and circleMarker radius are screen-space constants, so
+   they never changed as you zoomed. At the zoom this opens at that put a 20 ft
+   ribbon on a boundary surveyed to hundredths, and drew a corner known to inches
+   as a 62 ft blob — and zooming out only made it worse, because the parcel
+   shrank while the symbols did not.
+
+   These are still symbols, not footprints: a corner scaled truly to the ground
+   would vanish. So scale with zoom and clamp both ends — readable when zoomed
+   out, never swelling past the feature it marks when zoomed in. Reference is
+   z18, the zoom you actually stand on a monument at. */
+const Z_REF=18, Z_MIN=0.55, Z_MAX=1.6;
+function zScale(){ return Math.max(Z_MIN, Math.min(Z_MAX, Math.pow(2,(map.getZoom()-Z_REF)*0.55))); }
+function restyleForZoom(){
+  const k=zScale();
+  const fix=l=>{ if(l._bR!=null) l.setRadius(l._bR*k); else if(l._bW!=null) l.setStyle({weight:l._bW*k}); };
+  Object.values(groups).forEach(g=>g.eachLayer(fix));
+  mkLayer.eachLayer(fix);
+  if(trk.line) trk.line.setStyle({weight:3*k});
+}
 let shift={dLat:0,dLon:0,tie:null,dE:0,dN:0};
 const sh=p=>[p[1]+shift.dLat, p[0]+shift.dLon];
 
@@ -245,19 +265,20 @@ function drawParcel(){
     const nm=f.properties.name, ds=f.properties.desc||'';
     let lyr;
     if(f.geometry.type==='Polygon')
-      lyr=L.polygon(f.geometry.coordinates[0].map(sh),{renderer:canvasR,color:s.color,weight:s.weight,
+      lyr=L.polygon(f.geometry.coordinates[0].map(sh),{renderer:canvasR,color:s.color,weight:s.weight*zScale(),
         fillColor:s.fillColor,fillOpacity:s.fillOpacity,dashArray:s.dashArray});
     else if(f.geometry.type==='LineString')
-      lyr=L.polyline(f.geometry.coordinates.map(sh),{renderer:canvasR,color:s.color,weight:s.weight});
+      lyr=L.polyline(f.geometry.coordinates.map(sh),{renderer:canvasR,color:s.color,weight:s.weight*zScale()});
     else {
       const ll=sh(f.geometry.coordinates), sp=toSP(ll[0],ll[1]);
-      lyr=L.circleMarker(ll,{renderer:canvasR,radius:s.r,color:'#0E1116',weight:2,fillColor:s.color,fillOpacity:1});
+      lyr=L.circleMarker(ll,{renderer:canvasR,radius:s.r*zScale(),color:'#0E1116',weight:2,fillColor:s.color,fillOpacity:1});
       lyr.bindPopup(`<b>${nm}</b><br><code>${ll[0].toFixed(7)}, ${ll[1].toFixed(7)}</code><br>`
         +`<code>E ${sp[0].toFixed(2)} N ${sp[1].toFixed(2)}</code>`
         +`<br><br><button class="btn sm" data-navplan="${esc(nm)}">Navigate here</button>`
         +(ds?`<br><br>${ds}`:''));
     }
     if(f.geometry.type!=='Point') lyr.bindPopup(`<b>${nm}</b>${ds?'<br><br>'+ds:''}`);
+    if(f.geometry.type==='Point') lyr._bR=s.r; else lyr._bW=s.weight;   /* base size for zoom scaling */
     lyr.addTo(g);
   });
   rebuildSP();
@@ -468,7 +489,8 @@ function tick(){
    ══════════════════════════════════════════════════════════════ */
 const trk={on:false,pts:[],line:null,t0:0,dist:0,moving:0,
   start(){ this.on=true;this.pts=[];this.dist=0;this.moving=0;this.t0=Date.now();
-    this.line=L.polyline([],{renderer:canvasR,color:'#B08CFF',weight:3,opacity:.9}).addTo(map);
+    this.line=L.polyline([],{renderer:canvasR,color:'#B08CFF',weight:3*zScale(),opacity:.9}).addTo(map);
+    this.line._bW=3;
     $('trkBox').style.display='block'; $('bTrk').textContent='Stop track';
     $('bTrk').classList.add('rec'); holdWake(true); toast('Recording track'); },
   push(p){
@@ -516,8 +538,9 @@ function addMark(lat,lon,extra={}){
 function drawMarks(){
   mkLayer.clearLayers();
   marks.forEach(m=>{
-    const mk=L.circleMarker([m.lat,m.lon],{renderer:canvasR,radius:7,color:'#0E1116',weight:2.5,
+    const mk=L.circleMarker([m.lat,m.lon],{renderer:canvasR,radius:7*zScale(),color:'#0E1116',weight:2.5,
       fillColor:CATS[m.cat]||CATS.Other,fillOpacity:1}).on('click',()=>openSheet(m.id));
+    mk._bR=7;
     if(showLabels) mk.bindTooltip(esc(m.name),{permanent:true,direction:'right',className:'mkLbl',offset:[8,0]});
     mk.addTo(mkLayer);
   });
@@ -1200,6 +1223,7 @@ function paintRose(){
   paintTarget();
 }
 map.on('rotate',paintRose);
+map.on('zoomend',restyleForZoom);
 function applyOrient(){
   if(oMode===1&&me&&me.hdg!=null) setBearing(-me.hdg);
   else if(oMode===2&&magHeading!=null) setBearing(-(magHeading+declination()));  /* mag -> true */
