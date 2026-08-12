@@ -50,7 +50,7 @@
 <div id="fitbar"></div>
 <div id="toast"></div>
 <div id="block"><h3 id="bTitle">Location unavailable</h3><p id="bBody"></p>
-  <button class="btn sm" onclick="document.getElementById('block').classList.remove('on')">Dismiss</button></div>
+  <button class="btn sm" id="bDismiss">Dismiss</button></div>
 
 <div id="fabs">
   <button class="fab" id="fCen" aria-label="Center on me"><svg width="24" height="24" viewBox="0 0 24 24"
@@ -285,6 +285,7 @@
     <div class="dat">
       <dl class="dl"><dt>Unsaved marks</dt><dd id="bUnsaved">—</dd></dl>
       <dl class="dl"><dt>Last export</dt><dd id="bLast">never</dd></dl>
+      <dl class="dl"><dt>Storage</dt><dd id="bPersist">—</dd></dl>
       <p class="hint" style="margin:8px 2px">Nothing here syncs anywhere. Marks live in this browser
         on this phone only. Export after every trip.</p>
       <div class="fld" style="margin-top:10px"><label class="f">Lock a copy with a passphrase</label>

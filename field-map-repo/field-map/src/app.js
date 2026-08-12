@@ -76,7 +76,11 @@ function rebuildSP(){
 const mem={};
 let storeBroken=false;
 const store={
-  get(k){ try{ const v=localStorage.getItem(k); return v==null?mem[k]:v; }catch(e){ return mem[k]; } },
+  /* mem wins once written. After a quota failure localStorage still holds the
+     last good value, and preferring it handed back stale data — including to
+     paintBackup(), so exporting produced no acknowledgement. All boot reads
+     happen before any set(), so this cannot mask a real stored value. */
+  get(k){ if(k in mem) return mem[k]; try{ return localStorage.getItem(k); }catch(e){ return undefined; } },
   /* A swallowed write here means marks survive the session and vanish on reload.
      Surface it loudly instead — the data is still in memory, so exporting saves it. */
   set(k,v){
@@ -513,16 +517,40 @@ const CATS={'Monument':'#FF8A3D','Rock / ledge':'#B08CFF','Tree':'#5BE58B','Wate
             'Structure':'#FFC53D','Hazard':'#FF5C5C','Other':'#9AA7B8'};
 let marks=[], mkLayer=L.layerGroup().addTo(map), lastDeleted=null, showLabels=true, filterTxt='';
 const liveURLs=[];   /* object URLs owned by the current list render */
-try{ marks=JSON.parse(store.get('fm_marks')||'[]'); }catch(e){ marks=[]; }
+let marksLoaded=false;
+try{ marks=JSON.parse(store.get('fm_marks')||'[]'); marksLoaded=true; }catch(e){ marks=[]; }
 const saveMarks=()=>{ const r=store.set('fm_marks',JSON.stringify(marks)); paintBackup(); syQueue(); return r; };
 function paintBackup(){
   const le=+(store.get('fm_exported_at')||0), n=+(store.get('fm_exported_n')||0);
   const el=$('bUnsaved'); if(!el) return;
   const pending=marks.length-n;
-  el.textContent = marks.length===0 ? 'none' : (pending>0? pending+' since last export' : 'all exported');
-  el.style.color = pending>0 && marks.length ? 'var(--warn)' : 'var(--good)';
+  if(storeBroken){ el.textContent='NOT SAVING — export now'; el.style.color='var(--bad)'; }
+  else {
+    el.textContent = marks.length===0 ? 'none' : (pending>0? pending+' since last export' : 'all exported');
+    el.style.color = pending>0 && marks.length ? 'var(--warn)' : 'var(--good)';
+  }
+  const pe=$('bPersist');
+  if(pe){ pe.textContent = persistOK===null?'checking…':persistOK?'persistent':'evictable — export often';
+          pe.style.color = persistOK===null?'var(--muted)':persistOK?'var(--good)':'var(--warn)'; }
   $('bLast').textContent = le? new Date(le).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'never';
 }
+/* Dismiss used to be inline HTML that only hid the banner. storeBroken stayed
+   true, and store.set() only raises the banner when it is false — so one gloved
+   tap made every subsequent failed save silent for the rest of the day. */
+$('bDismiss').onclick=()=>{ $('block').classList.remove('on'); storeBroken=false; };
+
+/* Chrome may evict IndexedDB and localStorage under storage pressure, and this
+   app's own tile cache is what creates that pressure. Ask once; an installed
+   PWA is normally granted silently, a plain tab can be refused — either way the
+   Backup panel now says which regime the day's marks are living in. */
+let persistOK=null;
+if(navigator.storage&&navigator.storage.persist){
+  navigator.storage.persisted()
+    .then(p=>p||navigator.storage.persist())
+    .then(ok=>{ persistOK=!!ok; paintBackup(); })
+    .catch(()=>{ persistOK=false; paintBackup(); });
+}
+
 const markExported=()=>{ store.set('fm_exported_at',String(Date.now()));
   store.set('fm_exported_n',String(marks.length)); paintBackup(); };
 /* imported text is untrusted: strip markup and cap length before it is stored */
@@ -955,7 +983,9 @@ async function syncNow(quiet){
     const merged=syMerge(marks,graveyard,data&&data.marks,data&&data.graveyard);
     marks=merged.marks; graveyard=merged.graveyard;
     await syPut({v:1,marks,graveyard,updated:Date.now()}, sha);
-    saveMarks(); saveGrave(); drawMarks(); renderList();
+    syApplying=true;                       /* these writes are the sync's own, do not re-arm it */
+    try{ saveMarks(); saveGrave(); } finally { syApplying=false; }
+    drawMarks(); renderList();
     store.set('fm_sync_at',String(Date.now()));
     syPaint('ok'); if(!quiet) toast('Synced '+marks.length+' marks');
   }catch(e){
@@ -973,7 +1003,13 @@ function syPaint(state){
          el.textContent=s[0]; el.style.color=s[1]; }
   $('syWhen').textContent=at?new Date(at).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'never';
 }
-const syQueue=()=>{ if(!SY.auto||!syReady()) return;
+/* syncNow() calls saveMarks() to persist what it merged, saveMarks() calls
+   syQueue(), and syQueue() schedules the next syncNow. The debounce that was
+   meant to batch edits became a permanent 20 s poll — GitHub API calls all day
+   on a battery-critical device, and renderList() throwing away the mark list
+   you were scrolling every 20 s. Writes made BY a sync must not re-arm it. */
+let syApplying=false;
+const syQueue=()=>{ if(syApplying||!SY.auto||!syReady()) return;
   clearTimeout(syTimer); syTimer=setTimeout(()=>syncNow(true), 20000); };
 addEventListener('online', ()=>{ syPaint(); if(SY.auto&&syReady()) syncNow(true); });
 addEventListener('offline', ()=>syPaint('offline'));
@@ -1400,12 +1436,18 @@ openDB().then(async()=>{
   if(HASS){ SY.auto=true; }
   syPaint(); syLabel();
   if(SY.auto&&syReady()&&navigator.onLine) setTimeout(()=>syncNow(true),1500);
-  try{  /* reclaim blobs left behind by earlier deletes */
-    const keys=await idbKeys('photos')||[];
-    const used=new Set(marks.flatMap(m=>m.photos||[]));
-    let freed=0;
-    for(const k of keys) if(!used.has(k)){ await idbDel('photos',k); freed++; }
-    if(freed) console.info('reclaimed '+freed+' orphaned photos');
+  /* Reclaim blobs left behind by earlier deletes. Gated on the mark list having
+     actually parsed: an unreadable fm_marks used to mean "every photo is
+     orphaned", escalating "marks are missing" into "marks are missing and every
+     photo is destroyed" — and photos never sync, so that is terminal. */
+  try{
+    if(marksLoaded && marks.length){
+      const keys=await idbKeys('photos')||[];
+      const used=new Set(marks.flatMap(m=>m.photos||[]));
+      let freed=0;
+      for(const k of keys) if(!used.has(k)){ await idbDel('photos',k); freed++; }
+      if(freed) console.info('reclaimed '+freed+' orphaned photos');
+    }
   }catch(e){}
 });
 setTimeout(()=>{ try{ map.fitBounds(groups.p1.getLayers()[0].getBounds().pad(0.18)); }catch(e){} },300);
