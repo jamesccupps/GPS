@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0E1116">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Field Map</title>
+
+<script>/*{{LEAFLET_JS}}*/</script>
+<script>/*{{LEAFLET_ROTATE_JS}}*/</script>
+<style>/*{{VENDOR_CSS}}*/
+/*{{APP_CSS}}*/</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="xh"><svg width="46" height="46" viewBox="0 0 46 46">
+  <circle cx="23" cy="23" r="13" fill="none" stroke="#FF8A3D" stroke-width="1.5"/>
+  <line x1="23" y1="1" x2="23" y2="14" stroke="#FF8A3D" stroke-width="1.5"/>
+  <line x1="23" y1="32" x2="23" y2="45" stroke="#FF8A3D" stroke-width="1.5"/>
+  <line x1="1" y1="23" x2="14" y2="23" stroke="#FF8A3D" stroke-width="1.5"/>
+  <line x1="32" y1="23" x2="45" y2="23" stroke="#FF8A3D" stroke-width="1.5"/>
+  <circle cx="23" cy="23" r="1.6" fill="#FF8A3D"/></svg></div>
+
+<div id="status">
+  <div class="st"><span class="k">Fix</span><span class="v" id="sFix">—</span></div>
+  <div class="st"><span class="k">± Accuracy</span><span class="v" id="sAcc">—</span></div>
+  <div class="st"><span class="k">Boundary</span><span class="v" id="sBnd">—</span></div>
+</div>
+
+<div id="target">
+  <div class="arw"><svg width="30" height="30" viewBox="0 0 30 30" id="tArw">
+    <polygon points="15,2 25,27 15,20 5,27" fill="#04181c"/></svg></div>
+  <div class="tt"><div class="tn" id="tName">—</div><div class="td" id="tDist">—</div></div>
+  <button class="tx" id="tStop">Stop</button>
+</div>
+
+<div id="compass" title="Orientation">
+  <svg width="32" height="32" viewBox="0 0 34 34" id="cRose">
+    <circle cx="17" cy="17" r="15" fill="none" stroke="#2A3240"/>
+    <polygon points="17,3 21,17 17,14 13,17" fill="#FF5C5C"/>
+    <polygon points="17,31 13,17 17,20 21,17" fill="#8A97A8"/>
+    <text x="17" y="11.5" font-size="7" font-family="monospace" fill="#E8EDF4" text-anchor="middle" font-weight="700">N</text>
+  </svg><span class="mode" id="cMode">NORTH UP</span>
+</div>
+
+<div id="fitbar"></div>
+<div id="toast"></div>
+<div id="block"><h3 id="bTitle">Location unavailable</h3><p id="bBody"></p>
+  <button class="btn sm" onclick="document.getElementById('block').classList.remove('on')">Dismiss</button></div>
+
+<div id="fabs">
+  <button class="fab" id="fCen" aria-label="Center on me"><svg width="24" height="24" viewBox="0 0 24 24"
+    fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8"/>
+    <line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/>
+    <line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg></button>
+  <button class="fab main" id="fAdd" aria-label="Mark here"><svg width="30" height="30" viewBox="0 0 24 24"
+    fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+    <path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z"/><line x1="12" y1="7" x2="12" y2="13"/>
+    <line x1="9" y1="10" x2="15" y2="10"/></svg></button>
+</div>
+
+<div id="panel">
+  <div id="head">
+  <div id="grip"><i></i></div>
+  <div id="tabs">
+    <button data-t="pos" class="on">Position</button>
+    <button data-t="mrk">Marks</button>
+    <button data-t="go">Go</button>
+    <button data-t="fit">Fit</button>
+    <button data-t="map">Map</button>
+  </div>
+  </div>
+
+  <div class="tab on" id="t-pos">
+    <div class="row">
+      <button class="btn pri" id="bMark">Mark here</button>
+      <button class="btn" id="bAvg">Average</button>
+    </div>
+    <div class="row">
+      <button class="btn sm" id="bCenter">Center</button>
+      <button class="btn sm" id="bTap">Tap to mark</button>
+      <button class="btn sm" id="bTrk">Record track</button>
+    </div>
+
+    <div class="dat" id="avgBox" style="display:none">
+      <h4>Averaging</h4>
+      <div class="bar"><i id="aBar"></i></div>
+      <dl class="dl"><dt>Progress</dt><dd id="aProg">—</dd></dl>
+      <dl class="dl"><dt>Kept / seen</dt><dd id="aKept">—</dd></dl>
+      <dl class="dl"><dt>Mean</dt><dd id="aMean">—</dd></dl>
+      <dl class="dl"><dt>Scatter RMS</dt><dd id="aRms">—</dd></dl>
+      <div class="row" style="margin:9px 0 0">
+        <button class="btn sm" id="aSave">Save as mark</button>
+        <button class="btn sm" id="aStop">Cancel</button>
+      </div>
+    </div>
+
+    <div class="dat">
+      <h4>Current position</h4>
+      <dl class="dl"><dt>Lat / Lon</dt><dd id="pDD">—</dd></dl>
+      <dl class="dl"><dt>DMS</dt><dd id="pDMS">—</dd></dl>
+      <dl class="dl"><dt>ME W SP ftUS</dt><dd id="pSP">—</dd></dl>
+      <dl class="dl"><dt>Elev / Speed</dt><dd id="pAlt">—</dd></dl>
+    </div>
+
+    <div class="dat">
+      <h4>Relative to plan</h4>
+      <dl class="dl"><dt>Parcel</dt><dd id="rIn">—</dd></dl>
+      <dl class="dl"><dt>Nearest line</dt><dd id="rLine">—</dd></dl>
+      <dl class="dl"><dt>Nearest corner</dt><dd id="rCor">—</dd></dl>
+      <div class="row" style="margin:9px 0 0"><button class="btn sm" id="rGo">Navigate to that corner</button></div>
+    </div>
+
+    <div class="dat" id="trkBox" style="display:none">
+      <h4>Track</h4>
+      <dl class="dl"><dt>Distance</dt><dd id="kDist">—</dd></dl>
+      <dl class="dl"><dt>Points / time</dt><dd id="kPts">—</dd></dl>
+      <div class="row" style="margin:9px 0 0">
+        <button class="btn sm" id="kSave">Save track</button>
+        <button class="btn sm" id="kDrop">Discard</button>
+      </div>
+    </div>
+
+    <p class="hint"><b>Averaging</b> throws away the first 8 seconds while the fix settles, weights each
+      remaining sample by its own accuracy, and rejects outliers. Stand still, phone flat and level in an
+      open palm, body clear of it. The screen is held awake while it runs.</p>
+  </div>
+
+  <div class="tab" id="t-mrk">
+    <div class="fld"><input type="search" id="mFind" placeholder="Search marks and notes"></div>
+    <div id="mList"></div>
+    <button class="btn sm disc" id="xTog">Export &amp; import ▾</button>
+    <div id="xBox" style="display:none">
+      <div class="row" style="margin-top:9px">
+        <button class="btn sm" id="xGeo">GeoJSON</button>
+        <button class="btn sm" id="xKml">KML</button>
+        <button class="btn sm" id="xCsv">CSV</button>
+      </div>
+      <div class="row">
+        <button class="btn sm" id="xImp">Import</button>
+        <button class="btn sm" id="xPho">Photos</button>
+        <button class="btn sm" id="xUndo">Undo delete</button>
+      </div>
+    </div>
+    <input type="file" id="fImp" accept=".json,.geojson" style="display:none">
+  </div>
+
+
+  <div class="tab" id="t-go">
+    <div class="dat">
+      <h4>Walk a line</h4>
+      <div class="fld"><label class="f">Line to follow</label><select id="lSel"></select></div>
+      <div class="row"><button class="btn cy" id="lGo">Follow this line</button></div>
+      <dl class="dl"><dt>Off line</dt><dd id="lOff">—</dd></dl>
+      <dl class="dl"><dt>To go</dt><dd id="lTogo">—</dd></dl>
+      <dl class="dl"><dt>Line bearing</dt><dd id="lBrg">—</dd></dl>
+    </div>
+    <div class="dat">
+      <h4>Trip</h4>
+      <dl class="dl"><dt>Walked</dt><dd id="gDist">—</dd></dl>
+      <dl class="dl"><dt>Moving time</dt><dd id="gTime">—</dd></dl>
+      <dl class="dl"><dt>Pace</dt><dd id="gPace">—</dd></dl>
+      <dl class="dl"><dt>ETA to target</dt><dd id="gEta">—</dd></dl>
+      <div class="row" style="margin:9px 0 0"><button class="btn" id="gBack">Back to start</button></div>
+    </div>
+    <div class="dat">
+      <h4>Daylight</h4>
+      <dl class="dl"><dt>Remaining</dt><dd id="dLeft">—</dd></dl>
+      <dl class="dl"><dt>Sunset</dt><dd id="dSet">—</dd></dl>
+      <dl class="dl"><dt>Full dark</dt><dd id="dDark">—</dd></dl>
+    </div>
+    <div class="dat">
+      <h4>Call out your position</h4>
+      <dl class="dl"><dt>MGRS</dt><dd id="gMgrs">—</dd></dl>
+      <dl class="dl"><dt>UTM 19T</dt><dd id="gUtm">—</dd></dl>
+      <dl class="dl"><dt>Lat / Lon</dt><dd id="gLL">—</dd></dl>
+      <div class="row" style="margin:9px 0 0">
+        <button class="btn sm" id="gCopy">Copy</button><button class="btn sm" id="gShare">Share</button></div>
+    </div>
+    <div class="dat">
+      <h4>Sensors</h4>
+      <dl class="dl"><dt>Declination</dt><dd id="sDec">—</dd></dl>
+      <dl class="dl"><dt>Compass</dt><dd id="sMag">—</dd></dl>
+      <dl class="dl"><dt>Battery</dt><dd id="sBat">—</dd></dl>
+      <dl class="dl"><dt>Signal</dt><dd id="sNet">—</dd></dl>
+    </div>
+    <p class="hint">Bearings everywhere in this app are <b>grid</b> north, matching your plan.
+      The phone's magnetometer reads <b>magnetic</b> north, about 14.6° west of true here.
+      That is corrected automatically — but if you walk a deed bearing with a handheld compass,
+      you must add it yourself.</p>
+  </div>
+
+  <div class="tab" id="t-fit">
+    <p class="hint" style="margin-top:0">Your plan geometry is <b>exact</b> — the deed traverse closes at
+      1:238,800. Only its placement floats, about ±10–20 ft, because it was fitted to the road centerline.
+      Find <b>one</b> monument, average on it, and shift the whole parcel to match.</p>
+    <div class="fld"><label class="f">Monument you are standing on</label><select id="fSel"></select></div>
+    <div class="row"><button class="btn pri" id="fAvg">Average here</button></div>
+    <div class="row">
+      <button class="btn sm" id="fApply" disabled>Apply shift</button>
+      <button class="btn sm" id="fClear">Clear shift</button>
+    </div>
+    <div class="dat">
+      <h4>Applied shift</h4>
+      <dl class="dl"><dt>Distance</dt><dd id="fDist">none</dd></dl>
+      <dl class="dl"><dt>Grid bearing</dt><dd id="fBrg">—</dd></dl>
+      <dl class="dl"><dt>ΔE / ΔN ftUS</dt><dd id="fDen">—</dd></dl>
+      <dl class="dl"><dt>Tied to</dt><dd id="fTie">—</dd></dl>
+      <dl class="dl"><dt>Check residual</dt><dd id="fChk">—</dd></dl>
+    </div>
+    <div class="fld"><label class="f">Check against a second monument</label><select id="fSel2"></select></div>
+    <div class="row"><button class="btn sm" id="fCheck">Check from here</button></div>
+    <p class="hint">Stand on a <b>different</b> monument after fitting and press Check. A small residual
+      means the fit is good. A large one means a corner was mis-identified.</p>
+  </div>
+
+  <div class="tab" id="t-map">
+    <label class="f" style="margin-bottom:6px">Basemap</label><div id="baseList"></div>
+    <label class="f" style="margin:14px 0 6px">Parcel overlays</label><div id="ovList"></div>
+    <label class="f" style="margin:14px 0 6px">LiDAR lighting</label>
+    <div class="dat">
+      <p class="hint" style="margin:0 0 9px">A wall only shows when the light rakes across it.
+        Cycle the sun around and watch different features appear.</p>
+      <div class="row">
+        <button class="btn sm" data-az="45">NE 45°</button>
+        <button class="btn sm" data-az="135">SE 135°</button>
+        <button class="btn sm" data-az="315">NW 315°</button>
+      </div>
+      <div class="row">
+        <button class="btn sm" data-az="270">W 270°</button>
+        <button class="btn sm" data-hs="multi">Multi-light</button>
+        <button class="btn sm" data-hs="slope">Slope</button>
+      </div>
+      <dl class="dl"><dt>Exaggeration</dt><dd id="zVal">3×</dd></dl>
+      <input type="range" id="zEx" min="1" max="8" step="1" value="3" style="min-height:auto;padding:0">
+    </div>
+    <label class="f" style="margin:14px 0 6px">Offline tiles</label>
+    <div class="dat">
+      <dl class="dl"><dt>Cached</dt><dd id="cCnt">—</dd></dl>
+      <dl class="dl"><dt>Storage</dt><dd id="cSize">—</dd></dl>
+      <div class="bar"><i id="cBar"></i></div>
+      <div class="row" style="margin:9px 0 0">
+        <button class="btn sm" id="cSave">Cache this view</button>
+        <button class="btn sm" id="cWipe">Clear cache</button>
+      </div>
+    </div>
+    <div class="row"><button class="btn sm" id="mLbl">Hide mark labels</button></div>
+    <label class="f" style="margin:14px 0 6px">Sync</label>
+    <div class="dat">
+      <dl class="dl"><dt>Status</dt><dd id="syState">not set up</dd></dl>
+      <dl class="dl"><dt>Last sync</dt><dd id="syWhen">never</dd></dl>
+      <div class="row" style="margin:9px 0 0">
+        <button class="btn sm" id="sySync">Sync now</button>
+        <button class="btn sm" id="syTog">Settings ▾</button>
+      </div>
+      <div id="syBox" style="display:none;margin-top:10px">
+        <dl class="dl"><dt>Repo</dt><dd id="syRepoLbl">—</dd></dl>
+        <div class="fld" style="margin-top:8px"><label class="f">Paste a GitHub token</label>
+          <input id="syTok" type="password" placeholder="github_pat_..." autocomplete="off"></div>
+        <div class="row"><button class="btn pri" id="sySave">Turn on sync</button></div>
+        <p class="hint" style="margin:8px 2px">github.com → Settings → Developer settings →
+          Fine-grained tokens. Select only this repo, permission <b>Contents: read and write</b>,
+          set an expiry. It stays on this device and never enters the published file.</p>
+        <button class="btn sm disc" id="syAdvTog">Advanced ▾</button>
+        <div id="syAdv" style="display:none;margin-top:9px">
+          <div class="row" style="margin:0 0 9px">
+            <input id="syOwner" placeholder="owner" autocapitalize="off" autocorrect="off">
+            <input id="syRepo" placeholder="repo" autocapitalize="off" autocorrect="off"></div>
+          <div class="row" style="margin:0 0 9px">
+            <input id="syBranch" placeholder="data" autocapitalize="off">
+            <input id="syPath" placeholder="field/marks.json" autocapitalize="off"></div>
+          <div class="fld"><label class="f">Encryption passphrase</label>
+            <input id="syPass" type="password" placeholder="defaults to your unlock passphrase" autocomplete="off"></div>
+          <label style="display:flex;align-items:center;gap:9px;margin:4px 2px 10px;font-size:13px;color:var(--muted)">
+            <input type="checkbox" id="syAuto" checked style="width:20px;height:20px;min-height:0"> Sync automatically</label>
+          <div class="row"><button class="btn sm" id="syTest">Test connection</button></div>
+        </div>
+      </div>
+    </div>
+    <label class="f" style="margin:14px 0 6px">Backup &amp; privacy</label>
+    <div class="dat">
+      <dl class="dl"><dt>Unsaved marks</dt><dd id="bUnsaved">—</dd></dl>
+      <dl class="dl"><dt>Last export</dt><dd id="bLast">never</dd></dl>
+      <p class="hint" style="margin:8px 2px">Nothing here syncs anywhere. Marks live in this browser
+        on this phone only. Export after every trip.</p>
+      <div class="fld" style="margin-top:10px"><label class="f">Lock a copy with a passphrase</label>
+        <input id="lkNew" type="password" placeholder="New passphrase" autocomplete="new-password"></div>
+      <div class="row"><button class="btn sm" id="lkMake">Download locked copy</button></div>
+      <p class="hint" style="margin:8px 2px">Your Pages site is public even from a private repo.
+        This encrypts the parcel into the file so only the passphrase opens it. Upload the locked
+        copy and keep the unlocked one off the server.</p>
+    </div>
+    <p class="hint"><b>Cache this view</b> downloads the current basemap for the area on screen down to
+      street level, and stores it in the browser. Once cached, that area draws with no signal at all.
+      Do it on wifi before you go. Cache the satellite layer and the LiDAR hillshade separately.</p>
+  </div>
+</div>
+
+<div id="veil"></div>
+<div id="sheet">
+  <h3 id="shTitle">Edit mark</h3>
+  <div class="fld"><label class="f">Name</label><input id="shName" placeholder="What is it"></div>
+  <div class="fld"><label class="f">Type</label><div class="cats" id="shCats"></div></div>
+  <div class="fld"><label class="f">Note — how to find it again</label>
+    <textarea id="shNote" placeholder="Approach, landmarks, depth, condition"></textarea></div>
+  <div class="fld"><label class="f">Photos</label>
+    <button class="btn sm" id="shCam">Add photo</button>
+    <input type="file" id="shFile" accept="image/*" capture="environment" multiple style="display:none">
+    <div class="phs" id="shPhs"></div></div>
+  <div class="row"><button class="btn pri" id="shOK">Save</button><button class="btn" id="shX">Cancel</button></div>
+  <div class="row"><button class="btn sm" id="shDel">Delete mark</button></div>
+</div>
+
+<script id="appsrc" type="text/plain">/*{{APP_JS}}*/</script>
+
+<div id="lock" style="position:absolute;inset:0;z-index:2000;background:#0E1116;display:none;
+  align-items:center;justify-content:center;padding:24px">
+  <div style="width:100%;max-width:340px">
+    <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#FF8A3D;
+      font-weight:700;margin-bottom:8px">Field Map</div>
+    <h2 style="margin:0 0 6px;font-size:19px;color:#E8EDF4;font-weight:600">Locked</h2>
+    <p style="margin:0 0 16px;font-size:13px;color:#78859A;line-height:1.55">
+      This site is public. The parcel is encrypted inside the file, so the passphrase
+      is the only thing that opens it.</p>
+    <input id="lkPass" type="password" placeholder="Passphrase" autocomplete="current-password"
+      style="width:100%;background:#171C24;color:#E8EDF4;border:1px solid #2A3240;border-radius:8px;
+      padding:14px;font-size:16px;min-height:50px">
+    <label style="display:flex;align-items:center;gap:9px;margin:12px 2px;font-size:13px;color:#78859A">
+      <input type="checkbox" id="lkSave" checked style="width:20px;height:20px;min-height:0"> Remember on this device</label>
+    <button id="lkGo" style="width:100%;background:#FF8A3D;border:0;color:#1a0e04;border-radius:9px;
+      padding:15px;font-size:15px;font-weight:700;min-height:54px;cursor:pointer">Unlock</button>
+    <p id="lkErr" style="margin:12px 2px 0;font-size:13px;color:#FF5C5C;min-height:18px"></p>
+  </div>
+</div>
+
+<script>/*{{LOADER_JS}}*/</script>
+</body>
+</html>
