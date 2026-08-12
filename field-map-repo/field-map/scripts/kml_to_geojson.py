@@ -3,8 +3,10 @@
 data/parcel-source.kml -> data/parcel.geojson
 
 Preserves folder, styleUrl and description, because the app keys its layer
-styling off `style` and shows `desc` in popups. Coordinates are rounded to 6dp
-(~0.4 ft at this latitude) purely to keep the payload small.
+styling off `style` and shows `desc` in popups. Coordinates are rounded to 7dp
+(~0.04 ft at this latitude), which keeps toSP() reproducing the recorded plan
+corners and the deed line table to the hundredth of a foot it is verified to.
+6dp was ~0.4 ft and swamped that by an order of magnitude, for 11 KB.
 
     python3 scripts/kml_to_geojson.py
 """
@@ -17,7 +19,7 @@ SRC = ROOT / "data/parcel-source.kml"
 OUT = ROOT / "data/parcel.geojson"
 
 
-def coords(text, r=6):
+def coords(text, r=7):
     out = []
     for tok in text.split():
         p = tok.split(",")
