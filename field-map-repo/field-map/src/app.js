@@ -174,6 +174,17 @@ const MaineHS = CachedTiles.extend({
   getCacheId(){ return 'hs_'+hsOpt.mode+'_'+hsOpt.az+'_'+hsOpt.z; }
 });
 
+/* L.TileLayer.getTileUrl() fills {z} from the LAYER's current zoom, not from the
+   coords you hand it. That is fine for on-screen tiles, where the two always
+   agree, and silently wrong for a pre-cache job that walks z0..z0+3 while the map
+   sits at z0: every deeper level requested imagery at z0 and filed it under the
+   deeper key, so offline you got a real tile of the wrong place. MaineHS builds
+   its own bbox from c.z and was always correct. */
+function tileUrlAt(layer, c){
+  if(layer.getCacheId) return layer.getTileUrl(c);
+  return L.Util.template(layer._url, L.extend({s:layer._getSubdomain(c), x:c.x, y:c.y, z:c.z}, layer.options));
+}
+
 /* ══════════════════════════════════════════════════════════════
    5. MAP
    ══════════════════════════════════════════════════════════════ */
@@ -1032,8 +1043,13 @@ async function cacheStats(){
 }
 $('cSave').onclick=async()=>{
   if(!db) return toast('Storage unavailable');
-  const b=map.getBounds(), z0=Math.max(map.getZoom(),14);
-  const zmax=Math.min(z0+3, curBase.options.maxNativeZoom||19);
+  /* Anchor the range to what this layer can actually serve. USGS tops out at
+     z16, so standing at z18 the old range was for(z=18; z<=16) — it never ran,
+     and reported "Cached 0 tiles" behind a full progress bar. */
+  const b=map.getBounds();
+  const nat=curBase.options.maxNativeZoom||curBase.options.maxZoom||19;
+  const z0=Math.min(Math.max(map.getZoom(),14), nat);
+  const zmax=Math.min(z0+3, nat);
   const jobs=[];
   for(let z=z0; z<=zmax; z++){
     const n=Math.pow(2,z);
@@ -1050,7 +1066,7 @@ $('cSave').onclick=async()=>{
     try{
       const have=await idbGet('tiles',key);
       if(!have){
-        const r=await fetch(curBase.getTileUrl(j),{mode:'cors'});
+        const r=await fetch(tileUrlAt(curBase,j),{mode:'cors'});
         if(r.ok) await idbPut('tiles',key,await r.blob()); else failed++;
       }
     }catch(e){ failed++; }
@@ -1348,6 +1364,13 @@ addEventListener('resize',()=>{ const wasPeek=sheetH<=PEEK+4; measurePeek();
   setSheet(wasPeek?PEEK:Math.min(sheetH,snaps()[2]),false); });
 
 openDB().then(async()=>{
+  /* Caches written before the getTileUrl zoom fix hold real imagery of the wrong
+     place under every key deeper than the zoom it was cached at. There is no way
+     to tell a poisoned tile from a good one, so drop the store once. */
+  if(store.get('fm_tilez')!=='2'){
+    try{ await idbClear('tiles'); }catch(e){}
+    store.set('fm_tilez','2');
+  }
   drawMarks(); renderList(); cacheStats(); paintBackup();
   HASS = await detectHass();
   if(HASS){ SY.auto=true; }
