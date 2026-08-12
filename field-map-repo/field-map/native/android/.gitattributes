@@ -1,0 +1,5 @@
+# core.autocrlf=true would hand a Windows clone a CRLF gradlew, which breaks it
+# on any POSIX shell. The .bat wants CRLF for the same reason in reverse.
+gradlew         text eol=lf
+gradlew.bat     text eol=crlf
+*.jar           binary
