@@ -96,9 +96,6 @@ jobs:
       # A rolling release, so the phone has one permanent link to tap instead of
       # a per-run artifact that arrives as a zip and expires in thirty days:
       #   https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk
-      # A rolling release, so the phone has one permanent link to tap instead of
-      # a per-run artifact that arrives as a zip and expires in thirty days:
-      #   https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk
       - name: Publish the APK to a rolling release
         if: github.ref == 'refs/heads/main'
         env:
