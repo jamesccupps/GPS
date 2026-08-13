@@ -33,7 +33,11 @@ def strip_html(h):
 
 
 def main():
-    s = SRC.read_text()
+    # Pinned for the same reason build.py pins it: the Windows default codec is
+    # cp1252, and the KML's degree signs decode as 'A°' under it. A default run
+    # here rewrites every bearing in all 21 course and corner descriptions and
+    # grows the file 126 bytes, silently, into the locked Pages build.
+    s = SRC.read_text(encoding="utf-8")
     feats, folder = [], None
 
     pat = r"<Folder><name>(.*?)</name>|<Placemark><name>(.*?)</name>(.*?)</Placemark>"
@@ -71,7 +75,8 @@ def main():
         })
 
     OUT.write_text(json.dumps({"type": "FeatureCollection", "features": feats},
-                              separators=(",", ":")))
+                              separators=(",", ":")),
+                   encoding="utf-8", newline="\n")
     kinds = {}
     for f in feats:
         kinds[f["geometry"]["type"]] = kinds.get(f["geometry"]["type"], 0) + 1

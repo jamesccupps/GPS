@@ -5,7 +5,8 @@ const $ = id => document.getElementById(id);
 /* ══════════════════════════════════════════════════════════════
    1. PROJECTION — Maine West State Plane (NAD83), US survey feet
    TM, CM -70°10', origin 42°50', k0=0.9999666667, FE 900000 m.
-   Verified against the recorded plan to better than 0.01 ft.
+   Verified against the nine State Plane coordinates printed on the recorded
+   plan: 0.0098 ft mean residual, 0.0225 ft max.
    ══════════════════════════════════════════════════════════════ */
 const M2FT = 3937/1200, FT = 3.280839895;
 function toSP(lat, lon){
