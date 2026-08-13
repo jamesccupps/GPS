@@ -1423,15 +1423,35 @@ $('compass').onclick=()=>{
    UP added two more permanently-live listeners and the magnetometer was never
    released on the way out. */
 let magOn=false;
+/* alpha is referenced to the device's NATIVE (portrait) frame, not to however
+   the screen is currently rotated. Without the screen angle added back, turning
+   the phone sideways -- which this app has a wide layout for -- puts the map,
+   the rose and the navigate arrow 90 degrees out. That is four times the
+   declination error AUDIT.md records as 128 ft over 500 ft. */
+const screenAngle=()=>(screen.orientation&&screen.orientation.angle)||window.orientation||0;
 function onOrient(e){
   let hd=null;
   if(e.webkitCompassHeading!=null) hd=e.webkitCompassHeading;
   else if(e.alpha!=null&&(e.absolute||e.type==='deviceorientationabsolute')) hd=360-e.alpha;
-  if(hd!=null){ magHeading=hd; if(oMode===2) applyOrient(); }
+  if(hd!=null){ magHeading=((hd+screenAngle())%360+360)%360; if(oMode===2) applyOrient(); }
 }
+if(screen.orientation&&screen.orientation.addEventListener)
+  screen.orientation.addEventListener('change',()=>{ if(oMode===2) applyOrient(); });
 const iosOrient=()=>typeof DeviceOrientationEvent!=='undefined'&&DeviceOrientationEvent.requestPermission;
+/* A handset with no magnetometer used to sit in COMPASS UP forever: no event
+   ever fires, magHeading stays null, applyOrient does nothing, and #cMode still
+   reads COMPASS UP over a map left at bearing 0. You sight along the screen and
+   walk grid north believing it is your heading. */
+let magProbe=0;
 function attachCompass(){
   if(magOn) return; magOn=true;
+  clearTimeout(magProbe);
+  magProbe=setTimeout(()=>{
+    if(oMode===2 && magHeading==null){
+      oMode=0; stopCompass(); setBearing(0); paintRose();
+      toast('No compass on this phone — staying north up');
+    }
+  },4000);
   window.addEventListener('deviceorientationabsolute',onOrient,true);
   /* plain 'deviceorientation' is relative on Android and every one of its events
      is discarded by the guard above; it is only useful on iOS, which reports an
@@ -1440,6 +1460,7 @@ function attachCompass(){
   toast('Compass up — figure-eight the phone to calibrate');
 }
 function stopCompass(){
+  clearTimeout(magProbe);
   if(!magOn) return; magOn=false;
   window.removeEventListener('deviceorientationabsolute',onOrient,true);
   window.removeEventListener('deviceorientation',onOrient,true);
