@@ -21,7 +21,7 @@ on:
       - '.github/workflows/apk.yml'
 
 permissions:
-  contents: read
+  contents: write        # needed to publish the rolling release
 
 jobs:
   apk:
@@ -73,3 +73,35 @@ jobs:
           path: field-map-repo/field-map/native/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      # A rolling release, so the phone has one permanent link to tap instead of
+      # a per-run artifact that arrives as a zip and expires in thirty days:
+      #   https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk
+      # A rolling release, so the phone has one permanent link to tap instead of
+      # a per-run artifact that arrives as a zip and expires in thirty days:
+      #   https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk
+      - name: Publish the APK to a rolling release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          cp android/app/build/outputs/apk/debug/app-debug.apk field-map.apk
+          {
+            echo "Debug-signed and sideloadable. Rebuilt on every push to main;"
+            echo "this link always points at the newest build."
+            echo
+            echo "Install: tap field-map.apk below, then allow installs from your"
+            echo "browser if Android asks."
+            echo
+            echo "Contains the unlocked parcel, like every build that is not the"
+            echo "locked copy published to Pages."
+            echo
+            echo "Built from ${GITHUB_SHA}"
+          } > notes.md
+          if ! gh release view apk-latest >/dev/null 2>&1; then
+            gh release create apk-latest --title "Field Map - latest APK" --notes-file notes.md
+          else
+            gh release edit apk-latest --notes-file notes.md
+          fi
+          gh release upload apk-latest field-map.apk --clobber

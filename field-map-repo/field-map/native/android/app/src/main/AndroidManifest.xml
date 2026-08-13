@@ -38,4 +38,7 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- PARTIAL_WAKE_LOCK: keep the CPU alive with the screen OFF while averaging
+         or recording. The web Wake Lock API can only hold the screen on. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 </manifest>

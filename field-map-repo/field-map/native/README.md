@@ -34,6 +34,40 @@ as-is and makes exactly two one-line changes: it injects the shim, and it
 neuters the service worker, which inside an APK caches local assets over local
 assets and can serve a stale app across an update.
 
+## What the APK adds that a browser cannot
+
+`FieldSensors.java` is a small custom Capacitor plugin covering the things the
+web platform has no API for at all. Everything is polled and feature-detected, so
+a phone missing any of it reads "none on this phone" rather than failing.
+
+| | Why it needs native |
+|---|---|
+| **Barometer** | There is no web barometer API. GPS height under canopy is worth little; pressure differences are good to a couple of feet. Zero it on a monument and read the difference — CLAUDE.md lists this as a known gap. |
+| **GNSS quality** | The web gives one accuracy number. `GnssStatus` gives satellites used/seen, per-satellite C/N0, and whether L5 is in the fix — the difference between "wait here" and "move out from under this hemlock". |
+| **Compass calibration** | Android reports magnetometer accuracy; the web reports nothing, so the app could only ever detect "no compass at all", not "needs a figure-eight". |
+| **Partial wake lock** | The web Wake Lock API is screen-on only, which is why averaging costs battery. `PARTIAL_WAKE_LOCK` holds the CPU with the screen off. |
+| **App-private storage** | `localStorage` lives in the WebView quota and can be evicted. Marks are mirrored to Capacitor Preferences, which is not, and restored on boot if the WebView copy is gone. |
+
+The readouts are injected into the Go tab at runtime by `src/native.js`. `app.js`
+is still not modified and still does not know this file exists.
+
+Not mirrored: photos and tiles. They are IndexedDB blobs and would be tens of
+megabytes across the bridge on every save.
+
+Still browser-only, deliberately: live data in the foreground-service
+notification (the plugin owns that notification and its text is fixed at watcher
+start), and anything needing hardware that is not here yet — external GNSS over
+USB or Bluetooth, and a laser rangefinder.
+
+## Install
+
+The build publishes a rolling release, so the phone has one permanent link:
+
+**https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk**
+
+Tap it on the phone and allow installs from your browser if Android asks. Debug
+-signed, so it sideloads without a Play account.
+
 ## Build
 
 ```bash

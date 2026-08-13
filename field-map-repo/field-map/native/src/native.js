@@ -204,4 +204,169 @@
 
   if (document.readyState === 'loading') addEventListener('DOMContentLoaded', armTrackFollow);
   else armTrackFollow();
+
+  /* ══════════════════════════════════════════════════════════════════════
+     THE SENSORS A BROWSER CANNOT REACH
+
+     All of this is additive and feature-detected: app.js is still not modified
+     and still does not know this file exists. Readouts are injected into the Go
+     tab at runtime, so the web build is unchanged by any of it.
+     ══════════════════════════════════════════════════════════════════════ */
+  var FS = function () { var c = window.Capacitor; return (c && c.Plugins && c.Plugins.FieldSensors) || null; };
+  var PREFS = function () { var c = window.Capacitor; return (c && c.Plugins && c.Plugins.Preferences) || null; };
+  var FT_PER_M = 3.280839895;
+
+  /* ── partial wake lock ──────────────────────────────────────────────────
+     app.js asks for a SCREEN lock while averaging or recording, which is all the
+     web can offer. Wrapping it adds a CPU lock alongside, so pressing the power
+     button mid-average no longer ends the average. */
+  (function wrapWakeLock() {
+    if (!navigator.wakeLock || !navigator.wakeLock.request) return;
+    var origRequest = navigator.wakeLock.request.bind(navigator.wakeLock);
+    navigator.wakeLock.request = function (type) {
+      var plugin = FS();
+      if (plugin) plugin.keepAwake({ on: true }).catch(function () {});
+      return origRequest(type).then(function (sentinel) {
+        var origRelease = sentinel.release.bind(sentinel);
+        sentinel.release = function () {
+          if (plugin) plugin.keepAwake({ on: false }).catch(function () {});
+          return origRelease();
+        };
+        return sentinel;
+      });
+    };
+  })();
+
+  /* ── app-private storage ────────────────────────────────────────────────
+     localStorage lives in the WebView's quota and can be evicted, which is the
+     root of a whole class of "the marks are gone" failures. Preferences is
+     app-private and is not subject to it. Mirror the small fm_ keys both ways:
+     write-through on every set, restore on boot for anything the WebView lost.
+     Photos and tiles are IndexedDB blobs and are deliberately not mirrored --
+     that would be tens of megabytes through the bridge on every save. */
+  var MIRROR = /^fm_/;
+  function mirrorWrite(k, v) {
+    var pr = PREFS(); if (!pr || !MIRROR.test(k)) return;
+    pr.set({ key: k, value: String(v) }).catch(function () {});
+  }
+  function mirrorRemove(k) {
+    var pr = PREFS(); if (!pr || !MIRROR.test(k)) return;
+    pr.remove({ key: k }).catch(function () {});
+  }
+  (function wrapStorage() {
+    if (!window.localStorage) return;
+    try {
+      var setItem = localStorage.setItem.bind(localStorage);
+      var removeItem = localStorage.removeItem.bind(localStorage);
+      localStorage.setItem = function (k, v) { var r = setItem(k, v); mirrorWrite(k, v); return r; };
+      localStorage.removeItem = function (k) { var r = removeItem(k); mirrorRemove(k); return r; };
+    } catch (e) { console.warn('[native] could not wrap localStorage:', e); }
+  })();
+  function restoreFromPrefs() {
+    var pr = PREFS(); if (!pr) return Promise.resolve(0);
+    return pr.keys().then(function (res) {
+      var keys = (res && res.keys) || [], n = 0, chain = Promise.resolve();
+      keys.filter(function (k) { return MIRROR.test(k); }).forEach(function (k) {
+        chain = chain.then(function () {
+          if (localStorage.getItem(k) != null) return;   // the WebView copy is the live one
+          return pr.get({ key: k }).then(function (r) {
+            if (r && r.value != null) { localStorage.setItem(k, r.value); n++; }
+          });
+        });
+      });
+      return chain.then(function () { return n; });
+    }).catch(function () { return 0; });
+  }
+
+  /* ── injected readouts ────────────────────────────────────────────────── */
+  var baroRef = null;
+  function mk(tag, attrs, text) {
+    var e = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function dlRow(label, id) {
+    var d = mk('dl', { 'class': 'dl' });
+    d.appendChild(mk('dt', null, label));
+    d.appendChild(mk('dd', { id: id }, '—'));
+    return d;
+  }
+  function injectPanel() {
+    var go = document.getElementById('t-go');
+    if (!go || document.getElementById('nvBox')) return;
+    var box = mk('div', { 'class': 'dat', id: 'nvBox' });
+    box.appendChild(mk('h4', null, 'Phone sensors'));
+    box.appendChild(dlRow('Satellites', 'nvSats'));
+    box.appendChild(dlRow('Signal C/N0', 'nvCn0'));
+    box.appendChild(dlRow('Compass', 'nvMag'));
+    box.appendChild(dlRow('Barometer', 'nvBaro'));
+    box.appendChild(dlRow('Height vs zero', 'nvRel'));
+    var r = mk('div', { 'class': 'row', style: 'margin:9px 0 0' });
+    var b = mk('button', { 'class': 'btn sm', id: 'nvZero' }, 'Zero height here');
+    r.appendChild(b);
+    box.appendChild(r);
+    box.appendChild(mk('p', { 'class': 'hint', style: 'margin:9px 2px 0' },
+      'GPS height is poor under canopy. Zero the barometer on a monument and the '
+      + 'difference where you stand is good to a couple of feet — enough to tell '
+      + 'a bank from a bench.'));
+    go.appendChild(box);
+    b.onclick = function () {
+      var p = FS(); if (!p) return;
+      p.pressure().then(function (v) {
+        if (v && v.hPa != null) {
+          baroRef = { hPa: v.hPa, isa: v.isaMetres };
+          if (window.toast) window.toast('Height zeroed here');
+        } else if (window.toast) window.toast('No barometer on this phone');
+      }).catch(function () {});
+    };
+  }
+
+  function paintSensors() {
+    var p = FS(); if (!p) return;
+    p.gnss().then(function (g) {
+      var s = document.getElementById('nvSats'), c = document.getElementById('nvCn0');
+      if (!s || !c) return;
+      if (!g || !g.available) { s.textContent = 'needs location permission'; c.textContent = '—'; return; }
+      s.textContent = g.used + ' used / ' + g.total + ' seen' + (g.l5 ? '  ·  ' + g.l5 + ' L5' : '');
+      c.textContent = g.medianCn0 ? g.medianCn0.toFixed(0) + ' dB-Hz median, ' + g.bestCn0.toFixed(0) + ' best' : '—';
+      /* below about 25 dB-Hz you are under canopy and waiting will not help */
+      c.style.color = !g.medianCn0 ? '' : g.medianCn0 >= 30 ? 'var(--good)'
+                    : g.medianCn0 >= 25 ? 'var(--warn)' : 'var(--bad)';
+    }).catch(function () {});
+    p.compassAccuracy().then(function (m) {
+      var e = document.getElementById('nvMag'); if (!e) return;
+      if (!m || !m.available) { e.textContent = 'no magnetometer'; e.style.color = 'var(--muted)'; return; }
+      var names = { '-1': 'not reporting yet', '0': 'unreliable — figure-eight it',
+                    '1': 'low — figure-eight it', '2': 'usable', '3': 'good' };
+      e.textContent = names[String(m.accuracy)] || String(m.accuracy);
+      e.style.color = m.accuracy >= 2 ? 'var(--good)' : m.accuracy >= 0 ? 'var(--warn)' : 'var(--muted)';
+    }).catch(function () {});
+    p.pressure().then(function (b) {
+      var e = document.getElementById('nvBaro'), rel = document.getElementById('nvRel');
+      if (!e || !rel) return;
+      if (!b || !b.available || b.hPa == null) { e.textContent = 'none on this phone'; rel.textContent = '—'; return; }
+      e.textContent = b.hPa.toFixed(2) + ' hPa';
+      if (baroRef == null) { rel.textContent = 'zero it on a monument first'; rel.style.color = 'var(--muted)'; return; }
+      var dFt = (b.isaMetres - baroRef.isa) * FT_PER_M;
+      rel.textContent = (dFt >= 0 ? '+' : '') + dFt.toFixed(1) + ' ft';
+      rel.style.color = '';
+    }).catch(function () {});
+  }
+
+  function startNative() {
+    if (!FS() && !PREFS()) return;            // browser: nothing to add
+    injectPanel();
+    restoreFromPrefs().then(function (n) {
+      if (n && window.toast) window.toast('Recovered ' + n + ' item(s) from app storage');
+    });
+    paintSensors();
+    setInterval(function () {
+      var t = document.getElementById('t-go');   // bridge round-trips: only while visible
+      if (t && t.classList.contains('on') && document.visibilityState === 'visible') paintSensors();
+    }, 2000);
+  }
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', startNative);
+  else startNative();
 })();
+
