@@ -144,11 +144,19 @@ const CachedTiles = L.TileLayer.extend({
                        img.crossOrigin=''; img.src=url; };
     if(!cacheOn || !db) { direct(); return img; }
     idbGet('tiles',key).then(blob=>{
-      if(blob){ img.onload=()=>{ URL.revokeObjectURL(img.src); done(null,img); }; img.src=URL.createObjectURL(blob); }
+      /* A cached blob that will not decode used to wedge this tile forever: no
+         onerror, so done() was never called, the tile stayed blank offline and
+         the only cure was wiping every legitimate tile too. Drop it and refetch. */
+      if(blob){ img.onload=()=>{ URL.revokeObjectURL(img.src); done(null,img); };
+               img.onerror=()=>{ URL.revokeObjectURL(img.src); idbDel('tiles',key).catch(()=>{}); direct(); };
+               img.src=URL.createObjectURL(blob); }
       else {
-        fetch(url,{mode:'cors'}).then(r=>r.ok?r.blob():Promise.reject()).then(bl=>{
+        /* status alone is not enough: a captive portal answers every tile 200
+           with an HTML login page, which then lives in the cache as a tile. */
+        fetch(url,{mode:'cors'}).then(r=>r.ok&&/^image\//.test(r.headers.get('content-type')||'')?r.blob():Promise.reject()).then(bl=>{
           idbPut('tiles',key,bl).catch(()=>{});
           img.onload=()=>{ URL.revokeObjectURL(img.src); done(null,img); };
+          img.onerror=()=>{ URL.revokeObjectURL(img.src); idbDel('tiles',key).catch(()=>{}); direct(); };
           img.src=URL.createObjectURL(bl);
         }).catch(direct);
       }
@@ -160,7 +168,12 @@ const CachedTiles = L.TileLayer.extend({
    The service default is washed out (values 150-220 of 255) because Maine relief
    is gentle; a low sun with vertical exaggeration spans nearly the full range and
    makes stone walls, cart roads and cellar holes legible. */
-const hsOpt={az:45, alt:25, z:3, mode:'hill'};
+/* Persisted: these values are half of every hillshade cache key, so losing them
+   on reload orphaned every tile cached under them — the pane goes grey in the
+   woods while the Map tab still reports the megabytes. */
+const hsOpt=Object.assign({az:45, alt:25, z:3, mode:'hill'},
+  (()=>{ try{ return JSON.parse(store.get('fm_hs')||'{}'); }catch(e){ return {}; } })());
+const hsSave=()=>store.set('fm_hs',JSON.stringify(hsOpt));
 function hsRule(){
   if(hsOpt.mode==='slope') return {rasterFunction:'Slope',rasterFunctionArguments:{ZFactor:hsOpt.z}};
   if(hsOpt.mode==='multi') return {rasterFunction:'Hillshade',
@@ -176,7 +189,11 @@ const MaineHS = CachedTiles.extend({
       +`?bbox=${x0},${y0},${x1},${y1}&bboxSR=3857&imageSR=3857&size=256,256&format=png&f=image`
       +`&renderingRule=${encodeURIComponent(JSON.stringify(hsRule()))}`;
   },
-  getCacheId(){ return 'hs_'+hsOpt.mode+'_'+hsOpt.az+'_'+hsOpt.z; }
+  /* hsRule() only sends Azimuth/Altitude in 'hill' mode, so keying multi and
+     slope by azimuth stored identical tiles up to four times over — and made
+     them miss after a trip through the sun buttons and back. */
+  getCacheId(){ return hsOpt.mode==='hill' ? 'hs_hill_'+hsOpt.az+'_'+hsOpt.alt+'_'+hsOpt.z
+                                           : 'hs_'+hsOpt.mode+'_'+hsOpt.z; }
 });
 
 /* L.TileLayer.getTileUrl() fills {z} from the LAYER's current zoom, not from the
@@ -1230,7 +1247,7 @@ function relight(){
   hs.redraw();
 }
 document.querySelectorAll('[data-az]').forEach(b=>b.onclick=()=>{
-  hsOpt.az=+b.dataset.az; hsOpt.mode='hill';
+  hsOpt.az=+b.dataset.az; hsOpt.mode='hill'; hsSave();
   if(!map.hasLayer(bases['LiDAR hillshade'])){
     map.removeLayer(curBase); curBase=bases['LiDAR hillshade']; curBase.addTo(map); curBase.bringToBack();
     [...$('baseList').children].forEach(c=>{const on=c.dataset.b==='LiDAR hillshade';
@@ -1239,7 +1256,7 @@ document.querySelectorAll('[data-az]').forEach(b=>b.onclick=()=>{
   toast('Sun from '+hsOpt.az+'°');
 });
 document.querySelectorAll('[data-hs]').forEach(b=>b.onclick=()=>{
-  hsOpt.mode=b.dataset.hs;
+  hsOpt.mode=b.dataset.hs; hsSave();
   if(!map.hasLayer(bases['LiDAR hillshade'])){
     map.removeLayer(curBase); curBase=bases['LiDAR hillshade']; curBase.addTo(map); curBase.bringToBack();
     [...$('baseList').children].forEach(c=>{const on=c.dataset.b==='LiDAR hillshade';
@@ -1248,7 +1265,7 @@ document.querySelectorAll('[data-hs]').forEach(b=>b.onclick=()=>{
   toast(b.dataset.hs==='slope'?'Slope shading':'Multi-directional light');
 });
 $('zEx').oninput=e=>{ hsOpt.z=+e.target.value; $('zVal').textContent=hsOpt.z+'×'; };
-$('zEx').onchange=()=>{ if(map.hasLayer(bases['LiDAR hillshade'])) relight(); };
+$('zEx').onchange=()=>{ hsSave(); if(map.hasLayer(bases['LiDAR hillshade'])) relight(); };
 [['syOwner','owner'],['syRepo','repo'],['syBranch','branch'],['syPath','path'],
  ['syTok','tok'],['syPass','pass']].forEach(([id,k])=>{ if($(id)) $(id).value=SY[k]||''; });
 if($('syAuto')) $('syAuto').checked=SY.auto!==false;
