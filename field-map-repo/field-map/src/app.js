@@ -1871,19 +1871,30 @@ function snapTo(h,v){
 const expand=()=>{ if(sheetH<snaps()[1]-10) setSheet(snaps()[1],true); };
 
 (function(){
-  let sy=0, sh0=0, lastY=0, lastT=0, vel=0, dragging=false, armed=false, tabEl=null;
+  let sy=0, sh0=0, lastY=0, lastT=0, vel=0, dragging=false, armed=false, tabEl=null, pending=false;
   const yOf=e=>e.touches?e.touches[0].clientY:e.clientY;
 
+  /* A tap is not a drag. Claiming the gesture on touchstart meant the very first
+     touchmove -- and a finger always produces one, nobody lands perfectly still --
+     called preventDefault(), which cancels the click the tab buttons are wired to.
+     The tabs live inside #head, so on a phone the whole tray took no taps at all
+     while testing fine under a mouse, which never sends touchmove. Wait for real
+     movement before claiming the gesture. */
+  const SLOP=6;
   function begin(e){ sy=lastY=yOf(e); lastT=Date.now(); sh0=sheetH; vel=0;
-                     dragging=true; $('panel').style.transition='none'; }
+                     pending=true; dragging=false; }
   function move(e){
-    if(!dragging) return;
+    if(!dragging){
+      if(!pending) return;
+      if(Math.abs(yOf(e)-sy)<SLOP) return;   // still a tap; leave the click alone
+      dragging=true; $('panel').style.transition='none';
+    }
     const y=yOf(e), now=Date.now(), dt=Math.max(now-lastT,1);
     vel=(y-lastY)/dt; lastY=y; lastT=now;
     setSheet(sh0+(sy-y), false);
     if(e.cancelable) e.preventDefault();
   }
-  function end(){ if(!dragging) return; dragging=false; snapTo(sheetH, vel); }
+  function end(){ pending=false; if(!dragging) return; dragging=false; snapTo(sheetH, vel); }
 
   const head=$('head');
   head.addEventListener('touchstart', begin, {passive:true});
