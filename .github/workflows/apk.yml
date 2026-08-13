@@ -102,6 +102,13 @@ jobs:
       # A rolling release, so the phone has one permanent link to tap instead of
       # a per-run artifact that arrives as a zip and expires in thirty days:
       #   https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk
+      #
+      # The repo sidebar dates a release by published_at, which is stamped once
+      # when the tag is first published and never moves again -- so a rolling
+      # release always reads stale there, however fresh the file under it is. The
+      # asset carries its own updated_at, and that is the one to trust:
+      #   gh release view apk-latest --json assets
+      # The build SHA and time also go in the title, which the sidebar does show.
       - name: Publish the APK to a rolling release
         if: github.ref == 'refs/heads/main'
         env:
@@ -109,6 +116,9 @@ jobs:
         run: |
           set -e
           cp android/app/build/outputs/apk/debug/app-debug.apk field-map.apk
+          SHORT=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          BUILT=$(date -u '+%Y-%m-%d %H:%M UTC')
+          TITLE="Field Map APK - ${SHORT} - built ${BUILT}"
           {
             echo "Debug-signed and sideloadable. Rebuilt on every push to main;"
             echo "this link always points at the newest build."
@@ -119,11 +129,15 @@ jobs:
             echo "Contains the unlocked parcel, like every build that is not the"
             echo "locked copy published to Pages."
             echo
-            echo "Built from ${GITHUB_SHA}"
+            echo "Built from ${GITHUB_SHA} at ${BUILT}."
+            echo
+            echo "The date GitHub prints beside this release on the repo page is"
+            echo "when the tag was first published, not when the APK was replaced."
+            echo "The title above, and the line before this one, are the build."
           } > notes.md
           if ! gh release view apk-latest >/dev/null 2>&1; then
-            gh release create apk-latest --title "Field Map - latest APK" --notes-file notes.md
+            gh release create apk-latest --title "$TITLE" --notes-file notes.md
           else
-            gh release edit apk-latest --notes-file notes.md
+            gh release edit apk-latest --title "$TITLE" --notes-file notes.md
           fi
           gh release upload apk-latest field-map.apk --clobber
