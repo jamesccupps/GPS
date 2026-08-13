@@ -29,7 +29,15 @@ HERE = Path(__file__).resolve().parent.parent      # native/
 WEB = HERE.parent                                  # field-map/
 WWW = HERE / "www"
 
-TAG = '<script src="native.js"></script>\n'
+# The flag is set before the shim so native.js knows for certain that it is
+# running inside the APK. It cannot infer that from window.Capacitor at
+# body-parse time, because the bridge may not have injected itself yet -- and
+# the answer decides whether a missing plugin means "fall back to the browser's
+# geolocation" or "wait, because the WebView's own geolocation has no
+# permission plumbing on Android".
+NL = chr(10)
+TAG = ("<script>window.__FIELDMAP_NATIVE__=1</script>" + NL +
+       '<script src="native.js"></script>' + NL)
 
 
 def assemble(run_build: bool) -> None:

@@ -28,6 +28,7 @@
   'use strict';
 
   var orig = navigator.geolocation;          // may be undefined; guarded below
+  var fixCount = 0, lastFixAt = 0, lastGeoErr = '';   // surfaced by the status line
 
   function plugin() {
     var cap = window.Capacitor;
@@ -97,22 +98,21 @@
 
   var geo = {
     watchPosition: function (success, error, options) {
-      var entry = { dead: false, id: null, success: success, error: error, background: false };
-      /* If the bridge is not up yet we fall back to the WebView's own
-         geolocation -- but the entry is recorded either way. It previously
-         returned early, so watchers stayed empty, and both promotion paths
-         (rebind and armTrackFollow) key on watchers. A bridge that was merely
-         late meant the APK ran on plain web geolocation for the whole session:
-         GPS fine, track fine, and then it stops the moment the screen sleeps,
-         which is the one thing the APK exists to prevent. Invisible until you
-         look at the evening's track and find a straight line across the swamp. */
-      if (!start(entry, false)) {
-        entry.fallbackId = orig ? orig.watchPosition(success, error, options) : null;
-      } else {
-        entry.native = true;
-      }
+      var counted = function (pos) { fixCount++; lastFixAt = Date.now(); if (success) success(pos); };
+      var failed  = function (e) { lastGeoErr = 'error ' + (e && e.code); if (error) error(e); };
+      var entry = { dead: false, id: null, success: counted, error: failed, background: false };
       var key = nextId++;
       watchers[key] = entry;
+
+      if (start(entry, false)) { entry.native = true; return key; }
+
+      /* The bridge is not up yet. In a browser that means delegate. In the APK it
+         does NOT: the WebView's own geolocation has no permission plumbing here,
+         so delegating produces a watcher that never fires and looks exactly like
+         a broken GPS -- which is what the first build did. Wait for the plugin
+         instead; adoptFallbacks() starts it the moment it appears. */
+      if (window.__FIELDMAP_NATIVE__) entry.pendingNative = true;
+      else entry.fallbackId = orig ? orig.watchPosition(counted, failed, options) : null;
       return key;
     },
     clearWatch: function (key) {
@@ -163,9 +163,11 @@
     if (!plugin()) return false;
     Object.keys(watchers).forEach(function (key) {
       var entry = watchers[key];
-      if (entry.dead || entry.fallbackId == null) return;
-      if (orig) { try { orig.clearWatch(entry.fallbackId); } catch (e) {} }
+      if (entry.dead) return;
+      if (entry.fallbackId == null && !entry.pendingNative) return;   // already native
+      if (entry.fallbackId != null && orig) { try { orig.clearWatch(entry.fallbackId); } catch (e) {} }
       entry.fallbackId = null;
+      entry.pendingNative = false;
       entry.native = true;
       start(entry, entry.background);
     });
@@ -179,12 +181,13 @@
       var tries = 0;
       var poll = setInterval(function () {
         if (adoptFallbacks()) { clearInterval(poll); armTrackFollow(); return; }
-        if (++tries >= 10) {
+        if (++tries >= 40) {                      /* 20 s: a cold start on a big page */
           clearInterval(poll);
-          if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
-            console.error('[native] BackgroundGeolocation never appeared; this APK cannot record in the background');
+          lastGeoErr = 'geolocation plugin missing';
+          if (window.__FIELDMAP_NATIVE__)
+            console.error('[native] BackgroundGeolocation never appeared; this APK cannot record position');
         }
-      }, 300);
+      }, 500);
       return;
     }
     adoptFallbacks();
@@ -355,7 +358,14 @@
   }
 
   function startNative() {
-    if (!FS() && !PREFS()) return;            // browser: nothing to add
+    injectDiag();                             // APK only; tells us what is actually wrong
+    if (window.__FIELDMAP_NATIVE__) {
+      ensurePermission().then(function (st) {
+        if (st !== 'granted') lastGeoErr = 'location ' + st;
+        adoptFallbacks();                     // permission may unblock the watcher
+      });
+    }
+    if (!FS() && !PREFS()) return;            // browser: nothing further to add
     injectPanel();
     restoreFromPrefs().then(function (n) {
       if (n && window.toast) window.toast('Recovered ' + n + ' item(s) from app storage');
@@ -366,6 +376,75 @@
       if (t && t.classList.contains('on') && document.visibilityState === 'visible') paintSensors();
     }, 2000);
   }
+
+  /* ══════════════════════════════════════════════════════════════════════
+     NATIVE STATUS LINE
+
+     The first APK looked alive and did nothing: the tray took no touches and no
+     fix ever arrived, with no way to tell which of half a dozen causes it was.
+     This is a one-line readout pinned under the status bar in the APK only, so
+     the answer is on the screen instead of behind a USB cable. Tap it to cycle
+     detail, long-press to hide for the session.
+     ══════════════════════════════════════════════════════════════════════ */
+  var IN_APK = !!window.__FIELDMAP_NATIVE__;
+  var diagEl = null, diagMode = 0;
+
+  function diagText() {
+    var cap = window.Capacitor;
+    var bridge = cap ? (cap.isNativePlatform && cap.isNativePlatform() ? 'native' : 'web') : 'none';
+    var bg = (cap && cap.Plugins && cap.Plugins.BackgroundGeolocation) ? 'yes' : 'NO';
+    var fs = FS() ? 'yes' : 'no';
+    var age = lastFixAt ? Math.round((Date.now() - lastFixAt) / 1000) + 's' : 'never';
+    if (diagMode === 0) {
+      return 'GPS ' + (fixCount ? fixCount + ' fixes, ' + age : 'no fix yet')
+           + (lastGeoErr ? ' · ' + lastGeoErr : '');
+    }
+    return 'bridge ' + bridge + ' · geo plugin ' + bg + ' · sensors ' + fs
+         + ' · fixes ' + fixCount + ' · inset ' + insetBottom() + 'px';
+  }
+  function insetBottom() {
+    var v = getComputedStyle(document.documentElement).getPropertyValue('--sab').trim();
+    var n = parseFloat(v);
+    return isFinite(n) ? Math.round(n) : 0;
+  }
+  function paintDiag() { if (diagEl) diagEl.textContent = diagText(); }
+  function injectDiag() {
+    if (!IN_APK || diagEl || !document.body) return;
+    diagEl = document.createElement('div');
+    diagEl.id = 'nvDiag';
+    diagEl.style.cssText = 'position:absolute;left:0;right:0;z-index:1000;'
+      + 'top:calc(env(safe-area-inset-top,0px) + 54px);'
+      + 'background:rgba(14,17,22,.92);color:#78859A;font:12px/1.5 ui-monospace,monospace;'
+      + 'padding:4px 10px;text-align:center;border-bottom:1px solid #2A3240';
+    var press = 0;
+    diagEl.addEventListener('touchstart', function () { press = Date.now(); }, { passive: true });
+    diagEl.addEventListener('click', function () {
+      if (Date.now() - press > 600) { diagEl.remove(); diagEl = null; return; }
+      diagMode = (diagMode + 1) % 2; paintDiag();
+    });
+    document.body.appendChild(diagEl);
+    paintDiag();
+    setInterval(paintDiag, 1000);
+  }
+
+  /* ── permission, requested when the Activity can actually show a dialog ──
+     The plugin asks as part of addWatcher, but that call happens during body
+     parse, which is far too early for a permission dialog. Ask again once the
+     document is ready and report what came back, so "no fix" can be told apart
+     from "never asked" and from "denied". */
+  function ensurePermission() {
+    var BG = plugin();
+    if (!BG || !BG.checkPermissions) return Promise.resolve('unknown');
+    return BG.checkPermissions().then(function (p) {
+      var st = (p && (p.location || p.display)) || 'unknown';
+      if (st === 'granted') return st;
+      if (!BG.requestPermissions) return st;
+      return BG.requestPermissions().then(function (r) {
+        return (r && (r.location || r.display)) || 'denied';
+      });
+    }).catch(function () { return 'unknown'; });
+  }
+
   if (document.readyState === 'loading') addEventListener('DOMContentLoaded', startNative);
   else startNative();
 })();

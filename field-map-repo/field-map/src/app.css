@@ -55,7 +55,11 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--ink);c
 #compass.track .mode{color:var(--fix)}
 
 /* ── panel ──────────────────────────────── */
+/* padding-bottom keeps the controls clear of the gesture strip when the window
+   IS laid out edge-to-edge; measurePeek() already adds --sab to the peek height,
+   so the head still sits fully above it */
 #panel{position:absolute;left:0;right:0;bottom:0;height:var(--panelH);z-index:950;will-change:height;
+  padding-bottom:var(--sab);
   background:var(--panel);border-top:1px solid var(--line);display:flex;flex-direction:column}
 #head{flex:none;touch-action:none;cursor:grab}
 #head:active{cursor:grabbing}
