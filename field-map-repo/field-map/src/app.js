@@ -34,7 +34,10 @@ function quad(az){
 }
 function dms(v,pos,neg){
   const h=v>=0?pos:neg; v=Math.abs(v);
-  const d=Math.floor(v), m=Math.floor((v-d)*60), s=((v-d)*60-m)*60;
+  /* quad() carries; this did not, so anything within 0.005" of a minute
+     boundary printed 60.00" -- and at 59 minutes, the wrong degree. */
+  let d=Math.floor(v), m=Math.floor((v-d)*60), s=+(((v-d)*60-m)*60).toFixed(2);
+  if(s>=60){ s=0; m++; } if(m===60){ m=0; d++; }
   return `${d}°${String(m).padStart(2,'0')}'${s.toFixed(2).padStart(5,'0')}"${h}`;
 }
 
@@ -337,6 +340,12 @@ map.on('rotate', ()=>{ if(rotRaf) return;
 /* WMM-2025 at the parcel: 14.552° W, drifting +0.0897°/yr.
    The magnetometer reads magnetic north; everything else here is grid. */
 const DEC_EPOCH=2026.6, DEC_VAL=-14.552, DEC_RATE=0.0897;
+/* coords.altitude is height above the WGS84 ellipsoid, not orthometric height.
+   GEOID18 separation at the parcel is about -28 m, so what was labelled "Elev"
+   read ~92 ft below every elevation it can be compared against -- including the
+   NAVD88 statewide DEM this app draws as its own hillshade. The parcel is 660 ft
+   across, so one constant is exact enough. */
+const GEOID_N=-28.0;   /* metres, GEOID18 at Hobart Road */
 function declination(){
   const now=new Date();
   const yr=now.getFullYear()+(now.getMonth()+0.5)/12;
@@ -447,7 +456,7 @@ function paintPos(){
   $('pDMS').textContent=dms(me.lat,'N','S')+' '+dms(me.lon,'E','W');
   const sp=toSP(me.lat,me.lon);
   $('pSP').textContent='E '+sp[0].toFixed(2)+'  N '+sp[1].toFixed(2);
-  $('pAlt').textContent=(me.alt!=null?(me.alt*FT).toFixed(0)+' ft':'—')+'  /  '
+  $('pAlt').textContent=(me.alt!=null?((me.alt-GEOID_N)*FT).toFixed(0)+' ft':'—')+'  /  '
     +(me.spd>0?(me.spd*2.23694).toFixed(1)+' mph':'still');
 }
 /* inside/outside + nearest line + nearest corner: the question you
@@ -647,6 +656,9 @@ if(navigator.storage&&navigator.storage.persist){
 
 const markExported=()=>{ store.set('fm_exported_at',String(Date.now())); paintBackup(); };
 /* imported text is untrusted: strip markup and cap length before it is stored */
+/* a sub-foot accuracy rounded to whole feet reads as ±0 ft, which is the same
+   false precision this readout exists to avoid */
+const fmtFt=v=>(v<10?v.toFixed(1):v.toFixed(0))+' ft';
 function clean(s){ return s==null?'':String(s).replace(/<[^>]*>/g,'').replace(/[\u0000-\u001F]/g,' ').trim().slice(0,300); }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -686,7 +698,7 @@ function renderList(){
         <div class="top"><div class="nm"><span class="dot" style="background:${CATS[m.cat]||CATS.Other}"></span>${esc(m.name)}</div>
           <div class="nav" data-nav="${esc(m.id)}">—</div></div>
         <div class="sub">${m.lat.toFixed(7)}, ${m.lon.toFixed(7)}</div>
-        <div class="sub">E ${sp[0].toFixed(2)} N ${sp[1].toFixed(2)}${m.n>1?'  ·  avg '+m.n+' ±'+(m.rms||0).toFixed(1)+' ft':''}</div>
+        <div class="sub">E ${sp[0].toFixed(2)} N ${sp[1].toFixed(2)}${m.n>1?'  ·  avg '+m.n+' · scatter '+(m.rms||0).toFixed(1)+' ft'+(m.acc?' · fix ±'+fmtFt(m.acc*FT):''):''}</div>
         ${m.note?`<div class="nt">${esc(m.note)}</div>`:''}
         <div class="acts">
           <button class="btn sm" data-act="go" data-id="${esc(m.id)}">Show</button>
