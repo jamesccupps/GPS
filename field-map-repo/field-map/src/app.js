@@ -762,7 +762,8 @@ $('lGo').onclick=()=>{
   const l=LINES[+$('lSel').value];
   clearNav();
   navT=null;
-  navLine={name:l.name, a:[l.a[0]+shift.dLat,l.a[1]+shift.dLon], b:[l.b[0]+shift.dLat,l.b[1]+shift.dLon]}; $('target').classList.add('on'); $('compass').classList.add('low');
+  navLine={name:l.name, idx:+$('lSel').value,
+           a:[l.a[0]+shift.dLat,l.a[1]+shift.dLon], b:[l.b[0]+shift.dLat,l.b[1]+shift.dLon]}; $('target').classList.add('on'); $('compass').classList.add('low');
   $('tName').textContent=l.name; buzz(12); paintLine(); toast('Following line');
 };
 function paintLine(){
@@ -837,6 +838,29 @@ $('rGo').onclick=()=>{ if(nearCorner) setNav('plan:'+nearCorner.nm,nearCorner.nm
 const fitPts=PARCEL.features.filter(f=>f.geometry.type==='Point');
 const optHTML=fitPts.map((f,i)=>`<option value="${i}">${esc(f.properties.name)}</option>`).join('');
 $('fSel').innerHTML=optHTML; $('fSel2').innerHTML=optHTML;
+/* A fit translates the whole parcel, but navT and navLine hold absolute lat/lon
+   resolved through sh() at the moment navigation started. Without re-anchoring,
+   applying a shift moved the polygon and the corner dots under your feet while
+   the arrow kept steering to the pre-shift position: you walk until the distance
+   zeroes, get the within-12-ft buzz, and dig a shift-length — normally 10-20 ft —
+   from the corner the app is simultaneously drawing. Walk-a-line had it worse,
+   reporting 0.0 ft "on line" while you stood a shift off the line under you.
+   Clearing a shift had the same bug in reverse.
+
+   Only plan-derived targets move. Marks and 'trk:start' are true absolute
+   positions and must be left exactly where they are. */
+function reanchorNav(){
+  if(navT && navT.id.indexOf('plan:')===0){
+    const f=PARCEL.features.find(x=>x.geometry.type==='Point'&&x.properties.name===navT.name);
+    if(f){ const ll=sh(f.geometry.coordinates); navT.lat=ll[0]; navT.lon=ll[1]; navT.hit=false; }
+  }
+  if(navLine && navLine.idx!=null && LINES[navLine.idx]){
+    const l=LINES[navLine.idx];
+    navLine.a=[l.a[0]+shift.dLat, l.a[1]+shift.dLon];
+    navLine.b=[l.b[0]+shift.dLat, l.b[1]+shift.dLon];
+  }
+  paintTarget(); paintLine();
+}
 function applyFit(){
   const m=avg.mean(); if(!m) return toast('No averaged position yet');
   const plan=fitPts[+$('fSel').value].geometry.coordinates;
@@ -844,7 +868,7 @@ function applyFit(){
   shift.tie=fitPts[+$('fSel').value].properties.name;
   const v=gridVec(plan[1],plan[0],m.lat,m.lon); shift.dE=v.dE; shift.dN=v.dN;
   store.set('fm_shift',JSON.stringify(shift));
-  drawParcel(); paintFit(); paintRel();
+  drawParcel(); paintFit(); paintRel(); reanchorNav();
   toast('Parcel shifted '+v.dist.toFixed(1)+' ft');
 }
 function paintFit(){
@@ -1319,7 +1343,7 @@ $('bCenter').onclick=()=>{ me?map.setView([me.lat,me.lon],19):toast('No GPS fix 
 $('fAvg').onclick=()=>avg.start('fit');
 $('fApply').onclick=applyFit;
 $('fClear').onclick=()=>{ shift={dLat:0,dLon:0,tie:null,dE:0,dN:0}; store.set('fm_shift','null');
-  drawParcel(); paintFit(); paintRel(); toast('Shift cleared'); };
+  drawParcel(); paintFit(); paintRel(); reanchorNav(); toast('Shift cleared'); };
 $('bTrk').onclick=()=>{ if(trk.on){ trk.stop(); toast('Track stopped — save or discard'); } else trk.start(); };
 $('kSave').onclick=()=>{ if(trk.pts.length<2) return toast('Track too short');
   dl('field-track.geojson',JSON.stringify({type:'FeatureCollection',features:[{type:'Feature',
