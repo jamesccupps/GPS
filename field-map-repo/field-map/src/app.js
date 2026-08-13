@@ -308,6 +308,24 @@ function drawParcel(){
 drawParcel();
 Object.entries(groups).forEach(([k,g])=>{ if(!STY[k].off) g.addTo(map); });
 
+/* leaflet-rotate binds `rotate: this._update` on every renderer (vendor:565).
+   For canvas that reallocates the backing store and re-projects and repaints
+   every path synchronously, in one task, with no rAF — and it fires once per
+   raw input: once per two-finger touchmove, and once per magnetometer sample in
+   compass-up. So the imagery, carried by the pane's CSS transform, composites on
+   the GPU while the vectors are torn down and repainted 60-120x/s behind it.
+   _update also writes this._zoom from the current FRACTIONAL pinch zoom, which
+   makes the next _onZoom compute scale~1, so the cheap CSS scale that normally
+   lets canvas vectors track a pinch never applies — the reported symptom.
+
+   Coalescing to one rebuild per frame fixes both. Not a longer debounce:
+   padding 0.5 inscribes a circle of 412 px against a viewport corner at 451 px,
+   so a stale canvas shows blank triangles at two corners mid-rotation. */
+map.off('rotate', canvasR._update, canvasR);
+let rotRaf=0;
+map.on('rotate', ()=>{ if(rotRaf) return;
+  rotRaf=requestAnimationFrame(()=>{ rotRaf=0; canvasR._update(); }); });
+
 /* ══════════════════════════════════════════════════════════════
    6b. SUN / GRID / MAGNETIC
    ══════════════════════════════════════════════════════════════ */
@@ -769,7 +787,7 @@ function paintTarget(){
   $('tDist').textContent=v.dist<1000?v.dist.toFixed(0)+' ft   '+quad(v.az)
     :(v.dist/5280).toFixed(2)+' mi   '+quad(v.az);
   const b=map.getBearing?map.getBearing():0;
-  $('tArw').style.transform=`rotate(${v.az+b}deg)`;   /* arrow is relative to the rotated map */
+  setArrow(v.az+b);   /* arrow is relative to the rotated map */
   if(v.dist<12 && !navT.hit){ navT.hit=true; toast('Within 12 ft of '+navT.name);
     if(navigator.vibrate) navigator.vibrate([120,60,120]); }
   if(v.dist>25) navT.hit=false;
@@ -813,7 +831,7 @@ function paintLine(){
   $('tDist').textContent=x.togo.toFixed(0)+' ft to go  ·  '+Math.abs(x.cross).toFixed(1)+' ft '+side;
   $('tName').textContent=navLine.name.slice(0,40)+'  ·  '+(Math.abs(x.cross)<3?'on line':steer);
   const b=map.getBearing?map.getBearing():0;
-  $('tArw').style.transform=`rotate(${az+b}deg)`;
+  setArrow(az+b);
 }
 /* trip computer, driven off the recorded track */
 function paintTrip(){
@@ -1331,13 +1349,39 @@ $('mLbl').onclick=()=>{ showLabels=!showLabels; drawMarks();
 
 let oMode=0, magHeading=null;
 const O_NAMES=['NORTH UP','HEADING UP','COMPASS UP'];
-const setBearing=d=>{ if(map.setBearing) map.setBearing(d); };
+/* getBearing() returns [0,360), so a 359.4 -> 0.3 step is a 359 degree CSS
+   change under transition:transform .12s — the rose and the target arrow visibly
+   spin the wrong way through north, exactly when you are reading north. Unwrap
+   to the nearest equivalent angle and keep a running value per element. */
+function unwrap(prev,deg){ return prev + (((deg-prev)%360+540)%360-180); }
+let roseDeg=0, arwDeg=0;
+function setArrow(deg){ arwDeg=unwrap(arwDeg,deg); $('tArw').style.transform='rotate('+arwDeg+'deg)'; }
+
+/* Rotation is driven by raw input — one setBearing per touchmove, one per
+   magnetometer sample. Coalesce to one per frame, and ignore anything under
+   0.6 degrees so magnetometer jitter cannot drive the map at all. */
+let wantBearing=null, brRaf=0;
+const setBearing=d=>{
+  if(!map.setBearing) return;
+  if(wantBearing==null){
+    const cur=map.getBearing?map.getBearing():0;
+    if(Math.abs(((d-cur)%360+540)%360-180)<0.6) return;
+  }
+  wantBearing=d;
+  if(brRaf) return;
+  brRaf=requestAnimationFrame(()=>{ brRaf=0;
+    const b=wantBearing; wantBearing=null; if(b!=null) map.setBearing(b); });
+};
 function paintRose(){
   const b=map.getBearing?map.getBearing():0, off=Math.abs(((b%360)+360)%360)>0.5;
-  $('cRose').style.transform=`rotate(${b}deg)`;
+  roseDeg=unwrap(roseDeg,b);
+  $('cRose').style.transform=`rotate(${roseDeg}deg)`;
   $('cMode').textContent=(oMode===0&&off)?String(Math.round(((-b%360)+360)%360)).padStart(3,'0')+'°':O_NAMES[oMode];
   $('compass').classList.toggle('track',oMode!==0||off);
-  paintTarget();
+  /* both guard on their own state, so exactly one does work. paintLine() was
+     missing: $('lGo') nulls navT, so while walking a line the arrow refreshed
+     only once per GPS fix and could be 90 degrees stale through a turn. */
+  paintTarget(); paintLine();
 }
 map.on('rotate',paintRose);
 map.on('zoomend',restyleForZoom);
@@ -1350,26 +1394,46 @@ $('compass').onclick=()=>{
   const b=map.getBearing?map.getBearing():0;
   if(oMode===0&&Math.abs(((b%360)+360)%360)>0.5){ setBearing(0); paintRose(); return toast('North up'); }
   oMode=(oMode+1)%3;
+  if(oMode!==2) stopCompass();          /* release the magnetometer on the way out */
   if(oMode===0){ setBearing(0); toast('North up'); }
   else if(oMode===1) toast(me&&me.hdg!=null?'Heading up':'Heading up — start walking for a course');
   else startCompass();
   applyOrient();
 };
+/* One handler for the life of the page. startCompass() used to close over a
+   fresh function on every call, so addEventListener could never dedupe it, and
+   there was no removeEventListener anywhere in the file: each visit to COMPASS
+   UP added two more permanently-live listeners and the magnetometer was never
+   released on the way out. */
+let magOn=false;
+function onOrient(e){
+  let hd=null;
+  if(e.webkitCompassHeading!=null) hd=e.webkitCompassHeading;
+  else if(e.alpha!=null&&(e.absolute||e.type==='deviceorientationabsolute')) hd=360-e.alpha;
+  if(hd!=null){ magHeading=hd; if(oMode===2) applyOrient(); }
+}
+const iosOrient=()=>typeof DeviceOrientationEvent!=='undefined'&&DeviceOrientationEvent.requestPermission;
+function attachCompass(){
+  if(magOn) return; magOn=true;
+  window.addEventListener('deviceorientationabsolute',onOrient,true);
+  /* plain 'deviceorientation' is relative on Android and every one of its events
+     is discarded by the guard above; it is only useful on iOS, which reports an
+     absolute webkitCompassHeading through it. */
+  if(iosOrient()) window.addEventListener('deviceorientation',onOrient,true);
+  toast('Compass up — figure-eight the phone to calibrate');
+}
+function stopCompass(){
+  if(!magOn) return; magOn=false;
+  window.removeEventListener('deviceorientationabsolute',onOrient,true);
+  window.removeEventListener('deviceorientation',onOrient,true);
+  magHeading=null;
+}
 function startCompass(){
-  const attach=()=>{
-    const h=e=>{ let hd=null;
-      if(e.webkitCompassHeading!=null) hd=e.webkitCompassHeading;
-      else if(e.alpha!=null&&(e.absolute||e.type==='deviceorientationabsolute')) hd=360-e.alpha;
-      if(hd!=null){ magHeading=hd; if(oMode===2) applyOrient(); } };
-    window.addEventListener('deviceorientationabsolute',h,true);
-    window.addEventListener('deviceorientation',h,true);
-    toast('Compass up — figure-eight the phone to calibrate');
-  };
-  if(typeof DeviceOrientationEvent!=='undefined'&&DeviceOrientationEvent.requestPermission)
-    DeviceOrientationEvent.requestPermission().then(r=>{ if(r==='granted') attach();
+  if(iosOrient())
+    DeviceOrientationEvent.requestPermission().then(r=>{ if(r==='granted') attachCompass();
       else { oMode=0; setBearing(0); paintRose(); toast('Compass permission denied'); } })
       .catch(()=>{ oMode=0; setBearing(0); paintRose(); toast('Compass unavailable'); });
-  else attach();
+  else attachCompass();
 }
 paintRose();
 
