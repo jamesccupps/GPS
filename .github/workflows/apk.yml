@@ -15,9 +15,15 @@ on:
   push:
     branches: [main]
     paths:
+      # scripts/ and vendor/ are in this list because assemble.py runs build.py,
+      # which concatenates vendor/ -- so a Leaflet bump or a build.py change alters
+      # the APK payload. Omitting them meant those edits shipped to Pages and left
+      # the APK stale, silently.
       - 'field-map-repo/field-map/native/**'
       - 'field-map-repo/field-map/src/**'
       - 'field-map-repo/field-map/data/**'
+      - 'field-map-repo/field-map/scripts/**'
+      - 'field-map-repo/field-map/vendor/**'
       - '.github/workflows/apk.yml'
 
 permissions:

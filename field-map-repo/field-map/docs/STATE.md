@@ -1,7 +1,7 @@
 # Where things stand
 
-Written at the end of the session that landed commits `1e1bcba..72d7e7b` (29 of
-them). `CLAUDE.md` is still the doc to read first; this one covers what is
+Written at the end of the session that landed commits `322d550..1d345ed` (30 of
+them; `git log --oneline 322d550..HEAD`). `CLAUDE.md` is still the doc to read first; this one covers what is
 *decided*, what is *open*, and what is waiting on James rather than on code.
 
 ---
@@ -13,7 +13,14 @@ them). `CLAUDE.md` is still the doc to read first; this one covers what is
 | Pages (locked) | https://jamesccupps.github.io/GPS/ |
 | APK (unlocked) | https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk |
 
-Both rebuild on every push to `main`. The Pages copy is encrypted with the
+Both rebuild on pushes to `main`, but on **different path filters**: Pages on
+anything under `field-map-repo/field-map/`, the APK on `native/`, `src/`,
+`data/`, `scripts/` and `vendor/`. The last two are in that list because
+`assemble.py` runs `build.py`, which concatenates `vendor/` — they were missing
+at first, so a Leaflet bump or a `build.py` change would have shipped to Pages
+and left the APK silently stale.
+
+The Pages copy is encrypted with the
 `FIELDMAP_PASSPHRASE` secret; the APK is not, deliberately, because a passphrase
 gate on every launch in the woods costs something and buys nothing on a phone you
 sideloaded yourself.
@@ -45,13 +52,18 @@ add four repo secrets: `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`,
 `signingConfig` and the workflow; the key and the passwords stay yours.
 
 **Bump `versionCode` in the same change** (`github.run_number`, not `run_id` —
-that overflows the 2.1e9 ceiling). Capacitor clears a persisted web-content path
-only when versionCode changes, so a stable key *without* a version bump would let
-a stale downloaded bundle outrank a freshly installed APK. They are one task.
+that overflows the 2.1e9 ceiling). It is hardcoded at
+`native/android/app/build.gradle:11` with no override hook, so wiring it means
+editing that line as well as passing the value from `apk.yml`. Capacitor clears
+its persisted web-content path when versionCode **or versionName** changes
+(`Bridge.isNewBinary`), so a stable key without a version bump would let a stale
+downloaded bundle outrank a freshly installed APK. They are one task.
 
-Moving to `assembleRelease` also drops `android:debuggable=true`, which today
-lets any authorised USB host `run-as` the package and read your tracks off the
-phone. Two string changes, real exposure on a field device.
+Moving to `assembleRelease` also drops `android:debuggable=true` — injected by
+AGP into debug builds, so grepping the manifest for it finds nothing — which
+today lets any authorised USB host `run-as` the package and read your tracks off
+the phone. Not a two-line change: `build.gradle` has no `signingConfigs` block
+at all, and `apk.yml` refers to the debug APK path in several places.
 
 ### 2. Two decisions before content OTA
 
@@ -64,8 +76,10 @@ phone. Two string changes, real exposure on a field device.
   fine-grained `Contents: write` covers release assets. Add OTA and a hostile
   bundle could read the token from the origin it runs in and publish the next
   "update" to itself. Fix by putting marks sync in a **different repo** from the
-  update source. Needs the sync panel to accept an explicit owner/repo override,
-  since `detectRepo()` derives them from the Pages hostname today.
+  update source. Cheaper than it sounds: the sync panel already takes an explicit
+  owner/repo (`src/index.html:294-295`, applied at `src/app.js:1625-1626`) and
+  `detectRepo()` only supplies the default — so this is configuration plus a
+  second fine-grained token, not new UI.
 
 ### 3. First-run report from the phone
 
@@ -105,10 +119,11 @@ first launch is the fastest way to confirm or kill the remaining diagnosis.
 
 ## Audit status
 
-An 18-agent audit produced 61 confirmed findings plus 10 more from a
-completeness pass. **All 15 high-severity items are closed**, along with most
-mediums and the four the critic found. `docs/AUDIT.md` records what was fixed and
-the reasoning.
+Per `docs/AUDIT.md`: 61 confirmed findings across eight parallel audits, each
+adversarially re-checked, plus 10 from a completeness pass. Every high-severity
+item is fixed, along with most mediums. Those counts come from that session and
+are **not re-derivable from the repo** — treat them as provenance, not as a
+claim to verify.
 
 Deliberately still open, all low or judgement-dependent: cached tiles carry no
 age stamp; photos are decoded twice on capture; edit-sheet Save loses an edit if
