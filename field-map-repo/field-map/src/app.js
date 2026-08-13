@@ -1159,9 +1159,10 @@ function dl(name,txt,mime){
 function bundle(){
   const fs=marks.map(m=>{ const sp=toSP(m.lat,m.lon);
     return {type:'Feature',geometry:{type:'Point',coordinates:[m.lon,m.lat]},
-      properties:{name:m.name,type:m.cat,note:m.note,accuracy_ft:m.acc?+(m.acc*FT).toFixed(1):null,
+      properties:{id:m.id,name:m.name,type:m.cat,note:m.note,accuracy_ft:m.acc?+(m.acc*FT).toFixed(1):null,
         fixes:m.n,scatter_ft:m.rms?+m.rms.toFixed(2):null,photos:(m.photos||[]).length,
-        sp_east_ftus:+sp[0].toFixed(2),sp_north_ftus:+sp[1].toFixed(2),recorded:new Date(m.t).toISOString()}};});
+        sp_east_ftus:+sp[0].toFixed(2),sp_north_ftus:+sp[1].toFixed(2),
+        recorded:new Date(m.t).toISOString(),updated:new Date(m.updated||m.t).toISOString()}};});
   if(trk.pts.length>1) fs.push({type:'Feature',geometry:{type:'LineString',
     coordinates:trk.pts.map(p=>[p.lon,p.lat])},properties:{name:'Recorded track',
     distance_ft:+trk.dist.toFixed(0),points:trk.pts.length}});
@@ -1212,19 +1213,38 @@ $('fImp').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   const rd=new FileReader();
   rd.onload=()=>{ try{
-    const g=JSON.parse(rd.result); let k=0, bad=0;
-    (g.features||[]).forEach(ft=>{
-      if(!ft.geometry||ft.geometry.type!=='Point') return;
+    const g=JSON.parse(rd.result);
+    const feats=(g.features||[]).filter(ft=>ft&&ft.geometry&&ft.geometry.type==='Point');
+    /* a statewide monument layer off the GeoLibrary would push unboundedly, blow
+       the quota, then build that many canvas markers and one innerHTML string */
+    if(feats.length>5000) return toast('That file has '+feats.length+' points — too many to import');
+    let k=0, bad=0, upd=0;
+    feats.forEach(ft=>{
       const lon=Number(ft.geometry.coordinates[0]), lat=Number(ft.geometry.coordinates[1]);
       /* never let an unusable coordinate into the map */
       if(!isFinite(lat)||!isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180){ bad++; return; }
       const p=ft.properties||{};
-      marks.push({id:'m'+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
-        name:clean(p.name)||'Imported', note:clean(p.note), cat:CATS[p.type]?p.type:'Other',
-        lat, lon, acc:null, n:Number(p.fixes)||1,
-        rms:isFinite(Number(p.scatter_ft))?Number(p.scatter_ft):null, photos:[], t:Date.now()}); k++; });
+      const when=Date.parse(p.recorded), touched=Date.parse(p.updated);
+      const rec={ name:clean(p.name)||'Imported', note:clean(p.note), cat:CATS[p.type]?p.type:'Other',
+        lat, lon, acc:isFinite(Number(p.accuracy_ft))?Number(p.accuracy_ft)/FT:null,
+        n:Number(p.fixes)||1, rms:isFinite(Number(p.scatter_ft))?Number(p.scatter_ft):null,
+        t:isFinite(when)?when:Date.now(), updated:isFinite(touched)?touched:Date.now() };
+      /* Restoring your own export used to mint a fresh id per feature and push
+         blind: 40 duplicates stacked pixel-on-pixel with identical names, which
+         saveMarks() then pushed to sync where they cannot be de-duplicated
+         because the ids differ, and on to every other device. */
+      const id=typeof p.id==='string'&&p.id?p.id.replace(/[^\w:.-]/g,'').slice(0,64):'';
+      const ex=id?marks.findIndex(x=>x.id===id):-1;
+      if(ex>=0){
+        if(rec.updated>(marks[ex].updated||marks[ex].t||0)){
+          marks[ex]=Object.assign({}, marks[ex], rec, {photos:marks[ex].photos||[]}); upd++;
+        }
+        return;
+      }
+      marks.push(Object.assign({id:id||('m'+Date.now().toString(36)+Math.random().toString(36).slice(2,5)),
+        photos:[]}, rec)); k++; });
     saveMarks(); drawMarks(); renderList();
-    toast('Imported '+k+' marks'+(bad?', skipped '+bad+' bad':''));
+    toast('Imported '+k+' marks'+(upd?', updated '+upd:'')+(bad?', skipped '+bad+' bad':''));
   }catch(err){ toast('Could not read that file'); } };
   rd.readAsText(f); e.target.value='';
 };
