@@ -26,8 +26,11 @@ deploy. Two things have to be set up once, in the repo settings:
 1. **Settings → Pages → Source: GitHub Actions**
 2. **Settings → Secrets and variables → Actions → `FIELDMAP_PASSPHRASE`**
 
-The workflow publishes `_site/index.html` (the locked build) and `_site/sw.js`.
-It never publishes `dist/field-map.html`, which is unlocked. If the secret is
+The workflow publishes `_site/index.html` (the locked build), `_site/sw.js`, and
+the PWA sidecars — `manifest.webmanifest`, `icon-192.png`, `icon-512.png`. The
+manifest has to be a real fetchable URL for Chrome to treat the site as
+installable, and an install is what makes `navigator.storage.persist()` likely
+to be granted. It never publishes `dist/field-map.html`, which is unlocked. If the secret is
 missing, `scripts/lock.py` exits non-zero and the deploy fails rather than
 putting the parcel on a public URL.
 
@@ -56,7 +59,12 @@ The only coordinates left in a locked file are `lat0` and `lon0` in the
 projection — the Maine West State Plane origin and central meridian, which are
 public constants for a zone covering most of western Maine.
 
-Worth re-running that scan if you touch the projection or the map setup:
+`lock.py` enforces this rather than leaving it to a scan: it refuses to write a
+file containing any `TELLTALES` string. That list originally held the deed book,
+the abutter and the corner names but **not the road or the town** — so a comment
+in `app.js` reading `GEOID18 at Hobart Road` shipped in the clear inside a
+"locked" file, and nothing caught it. Both are on the list now, and the scan
+below is the belt to that braces:
 
 ```bash
 grep -nE "(4[34]\.[0-9]{3,}|-7[01]\.[0-9]{3,})" _site/index.html
@@ -70,6 +78,27 @@ and nothing else.
 For sync, create a fine-grained token scoped to that one repo with
 **Contents: read and write** and an expiry. The app reads owner and repo from
 its own URL and writes to a `data` branch Pages does not publish.
+
+## Android APK
+
+Automated by `.github/workflows/apk.yml` on push to `main`, published to a
+rolling `apk-latest` release so the phone has one permanent link:
+
+**<https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk>**
+
+Built in CI because Gradle cannot run on the dev machine at all — see
+`docs/STATE.md`. The workflow parses every Android XML before Gradle starts,
+because the build log needs a sign-in to read and a malformed resource otherwise
+surfaces only as "exit code 1".
+
+Unlike the Pages copy this ships the parcel **unlocked**, deliberately: the lock
+exists because a Pages site is public, and a sideloaded APK on your own phone is
+not. The release notes say so.
+
+Two things are not yet done and are documented in `docs/STATE.md`: the APK is
+signed with a throwaway debug key that CI regenerates every run, so **updates
+cannot install over each other and require an uninstall that wipes all marks**;
+and `versionCode` is pinned at 1. Fix them together.
 
 ## Offline
 
