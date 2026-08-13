@@ -53,6 +53,9 @@ jobs:
         run: |
           python3 scripts/lock.py dist/field-map.html -o _site/index.html --verify
           cp dist/sw.js dist/manifest.webmanifest dist/icon-192.png dist/icon-512.png _site/
+          # lock() only ever inspects the HTML it writes; the sidecars are copied in
+          # beside it and would sail past the guard. Scan everything about to ship.
+          python3 scripts/lock.py _site --scan
 
       - uses: actions/upload-pages-artifact@v3
         with:

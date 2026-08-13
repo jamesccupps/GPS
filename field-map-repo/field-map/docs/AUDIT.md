@@ -122,6 +122,11 @@ while a real 645 ft walk still measures 645. Separately, the first fix after a
 ten-minute gap was hundreds of feet away and its distance was *added* — a
 straight line through the swamp you walked around.
 
+The other half of that gate has a field consequence worth knowing: fixes
+reporting worse than 65 ft accuracy are dropped outright, so under heavy enough
+canopy the track can record **nothing** — and "Back to start" is `trk.pts[0]`.
+It toasts once when it starts skipping, which is the only warning you get.
+
 ## The averaging window was closed by a timer, not by the data
 `push()` had no upper bound; only a `setTimeout` chain ended collection. Chrome
 throttles timers in a hidden page to ~1/min while `watchPosition` keeps
@@ -153,7 +158,10 @@ The merge is last-writer-wins on a client timestamp. A phone that goes flat in
 the cold and restarts off a battery pack comes back with whatever the RTC held,
 with no signal for NTP. The morning's marks were stamped in the past — older than
 any remote copy and older than tombstones, which drops re-created marks outright.
-Stamps are now monotonic.
+Stamps are now monotonic on every path that writes a mark in normal use —
+`addMark`, sheet Save, the delete tombstone, Undo and the sync `PUT`. Import is
+deliberately excluded: it preserves the `recorded` date from the file, which is
+the point of a restore.
 
 ## Four silent data-loss paths in storage
 Dismissing the storage-full banner latched the warning off permanently.
@@ -168,7 +176,11 @@ A comment reading `GEOID18 at Hobart Road`, added while fixing elevation, shippe
 in the clear inside the locked public file — `app.js` is not encrypted, only the
 parcel payload is. `TELLTALES` listed the deed book and the abutter but not the
 place, so `lock.py` would have refused a file containing "Bk 10912" while happily
-publishing one that named the road. Both are on the list now.
+publishing one that named the road. Both are on the list now — and the guard was
+widened, because it only ever inspected the one HTML file `lock()` writes.
+`sw.js`, the manifest and the icons are copied into `_site` beside it and were
+never scanned at all; `lock.py --scan` now walks the whole publish tree, and the
+deploy runs it.
 
 ## Injection sinks `esc()` never covered
 `renderList()` interpolated `m.id` and `m.photos[0]` into HTML attributes

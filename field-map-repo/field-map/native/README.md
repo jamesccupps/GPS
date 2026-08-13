@@ -51,8 +51,12 @@ a phone missing any of it reads "none on this phone" rather than failing.
 The readouts are injected into the Go tab at runtime by `src/native.js`. `app.js`
 is still not modified and still does not know this file exists.
 
-Not mirrored: photos and tiles. They are IndexedDB blobs and would be tens of
-megabytes across the bridge on every save.
+Not mirrored: **photos, cached tiles, and the live track**. All three are
+IndexedDB, and the mirror covers only the `fm_` localStorage keys. Photos and
+tiles would be tens of megabytes across the bridge on every save; the track is a
+deliberate gap worth knowing about, since it is the thing the APK exists to
+record. It is still persisted to IndexedDB and recovered on boot — it just does
+not survive the WebView's storage being cleared.
 
 Still browser-only, deliberately: live data in the foreground-service
 notification (the plugin owns that notification and its text is fixed at watcher
@@ -68,13 +72,33 @@ The build publishes a rolling release, so the phone has one permanent link:
 Tap it on the phone and allow installs from your browser if Android asks. Debug
 -signed, so it sideloads without a Play account.
 
+**A new build will not install over an old one.** CI generates a fresh debug
+keystore every run, so signatures differ and Android refuses with
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` — surfacing as a bare "App not installed".
+Uninstall first, **which wipes every mark**, so export before you do. Fixing this
+needs a stable signing key; `docs/STATE.md` has the commands.
+
+On first launch the APK shows a status line under the top bar: fix count and age,
+and on tap the bridge / plugin / sensor / safe-area-inset state. Long-press
+dismisses it. It exists because the first build looked alive and did nothing, with
+no way to tell which of six causes it was.
+
 ## Build
 
+**Gradle does not run on the current dev machine** — `Selector.open()` fails
+there, so every invocation dies before compiling. The APK is built by
+`.github/workflows/apk.yml`; see `docs/STATE.md`. The steps below are what CI
+does, and what would work on a machine where Gradle runs:
+
 ```bash
+npm ci                                  # node_modules is gitignored
 python3 scripts/assemble.py --build     # ../dist -> www/
 npx cap sync android
 cd android && ./gradlew assembleDebug   # gradlew.bat on Windows
 ```
+
+`npm run apk` chains the last three, but note its `assemble.py` has no `--build`,
+so it uses whatever is already in `../dist`.
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk`. Install with
 `adb install -r <apk>`, or copy it to the phone and open it.
@@ -86,7 +110,7 @@ Output: `android/app/build/outputs/apk/debug/app-debug.apk`. Install with
 | | |
 |---|---|
 | Node | **20 or 22**. Capacitor 8 requires Node 22; this project pins Capacitor 7, which runs on Node 20 so the system Node does not have to move. |
-| JDK | **17 or 21**. Gradle 8.11 does not support JDK 24+, so a newer JDK that happens to be on the machine will not work. |
+| JDK | **21**. `capacitor.build.gradle` sets source/target compatibility to 21, so JDK 17 fails with `invalid source release: 21`; and Gradle 8.11 does not support 24+, so a newer JDK on the machine will not work either. CI pins 21. |
 | SDK platform | `compileSdkVersion` in `android/variables.gradle` must be an `android-NN` you actually have installed under `platforms/`. |
 | `android/local.properties` | `sdk.dir=` pointing at the SDK. Machine-specific and gitignored, so it does not survive a clone — recreate it. |
 

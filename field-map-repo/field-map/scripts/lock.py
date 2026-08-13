@@ -101,12 +101,42 @@ def verify(out_path: Path, passphrase: str) -> None:
     print(f"verify: round-trip OK, {len(got['features'])} features recovered")
 
 
+def scan(root: Path) -> None:
+    """Scan every published file, not just the one lock() wrote.
+
+    lock() only ever sees the HTML it produces. sw.js, the manifest and the icons
+    are copied into _site alongside it, so a place name reappearing in any of
+    them would sail past the guard -- which is exactly the class of mistake that
+    put the road name in a "locked" file once already.
+    """
+    bad = []
+    for f in sorted(root.rglob("*")):
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue                      # icons and anything else binary
+        for t in TELLTALES:
+            if t in text:
+                bad.append(f"{f.relative_to(root)}: {t!r}")
+    for b in bad:
+        print("LEAK:", b)
+    print(f"scanned {root}: {len(bad)} leak(s)")
+    sys.exit(1 if bad else 0)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("source", type=Path, help="a built field-map.html")
+    ap.add_argument("source", type=Path, help="a built field-map.html, or a directory with --scan")
     ap.add_argument("-o", "--out", type=Path, help="defaults to alongside the source")
     ap.add_argument("--verify", action="store_true", help="decrypt the result and compare")
+    ap.add_argument("--scan", action="store_true",
+                    help="treat SOURCE as a directory and fail on any telltale in any file")
     a = ap.parse_args()
+
+    if a.scan:
+        scan(a.source)
 
     pw = os.environ.get("FIELDMAP_PASSPHRASE", "")
     if not pw:

@@ -41,6 +41,9 @@ either **Map → Backup & privacy → Lock a copy with a passphrase** in the app
 FIELDMAP_PASSPHRASE=... python3 scripts/lock.py dist/field-map.html     -o _site/index.html --verify
 ```
 
+`lock.py` needs `cryptography`, which is not vendored and not in any requirements
+file — CI installs it as its own step. `pip install cryptography` first.
+
 Both produce the same format: AES-256-GCM, PBKDF2-SHA256 at 310,000 iterations,
 16-byte salt, 12-byte IV. `--verify` decrypts the result and compares it against
 `data/parcel.geojson`, which is what catches the two implementations drifting
@@ -59,8 +62,10 @@ The only coordinates left in a locked file are `lat0` and `lon0` in the
 projection — the Maine West State Plane origin and central meridian, which are
 public constants for a zone covering most of western Maine.
 
-`lock.py` enforces this rather than leaving it to a scan: it refuses to write a
-file containing any `TELLTALES` string. That list originally held the deed book,
+`lock.py` enforces this in two places. `lock()` refuses to write an HTML file
+containing any `TELLTALES` string — but that only covers the one file it writes,
+so `lock.py _site --scan` walks the entire publish tree, sidecars included, and
+the deploy runs it after assembling `_site`. That list originally held the deed book,
 the abutter and the corner names but **not the road or the town** — so a comment
 in `app.js` reading `GEOID18 at Hobart Road` shipped in the clear inside a
 "locked" file, and nothing caught it. Both are on the list now, and the scan

@@ -37,9 +37,12 @@ install and the browser is far less likely to evict your marks.
 **Phone, app** — <https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk>.
 Sideload it. Adds the things a browser has no API for: background location that
 survives the screen sleeping, a barometer, GNSS satellite quality, compass
-calibration state, and storage the browser cannot evict. See `native/README.md`.
+calibration state, and eviction-proof storage for the small state — though not
+for photos, tiles or the track, which stay in IndexedDB. See `native/README.md`.
 
-**Home Assistant add-on** — copy `addon/field_map` to your `/addons` share,
+**Home Assistant add-on** — run `python3 scripts/build.py` **first**: the add-on's
+`rootfs/app/static/` is gitignored and only build.py populates it, so a fresh
+clone has nothing to serve. Then copy `addon/field_map` to your `/addons` share,
 install from the Add-on Store, start, enable the sidebar. Zero configuration;
 ingress puts it behind HA's login and data lands in HA backups.
 
