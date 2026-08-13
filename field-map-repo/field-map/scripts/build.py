@@ -17,6 +17,7 @@ app.js, and the default newline translation would rewrite every LF as CRLF —
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
+SIDECARS = ("manifest.webmanifest", "icon-192.png", "icon-512.png")
 
 TOKENS = {
     "{{VENDOR_CSS}}":       ("vendor/leaflet.css",       "/* Leaflet 1.9.4 */"),
@@ -63,12 +65,19 @@ def build() -> Path:
     sw = read(ROOT / "src/sw.js")
     write(out, html)
     write(DIST / "sw.js", sw)
+    # Sidecars, not inlined: a manifest has to be a real URL for Chrome to treat
+    # the site as installable, and an install is what makes storage.persist()
+    # likely to be granted. The app still boots without them.
+    for name in SIDECARS:
+        shutil.copyfile(ROOT / "src" / name, DIST / name)
 
     # the add-on serves its own copy
     static = ROOT / "addon/field_map/rootfs/app/static"
     static.mkdir(parents=True, exist_ok=True)
     write(static / "field-map.html", html)
     write(static / "sw.js", sw)
+    for name in SIDECARS:
+        shutil.copyfile(ROOT / "src" / name, static / name)
 
     print(f"dist/field-map.html  {out.stat().st_size // 1024} KB")
     return out

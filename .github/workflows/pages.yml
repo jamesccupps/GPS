@@ -52,7 +52,7 @@ jobs:
           FIELDMAP_PASSPHRASE: ${{ secrets.FIELDMAP_PASSPHRASE }}
         run: |
           python3 scripts/lock.py dist/field-map.html -o _site/index.html --verify
-          cp dist/sw.js _site/sw.js
+          cp dist/sw.js dist/manifest.webmanifest dist/icon-192.png dist/icon-512.png _site/
 
       - uses: actions/upload-pages-artifact@v3
         with:

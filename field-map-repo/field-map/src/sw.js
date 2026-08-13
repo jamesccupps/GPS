@@ -3,7 +3,8 @@
    the app disappears ten minutes after the last load. Cache-first for the
    shell; map tiles are handled separately by the app's own IndexedDB store. */
 const CACHE = 'fieldmap-v1';
-const SHELL = ['./', './field-map.html', './field-map-locked.html', './index.html'];
+const SHELL = ['./', './field-map.html', './field-map-locked.html', './index.html',
+               './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   self.skipWaiting();

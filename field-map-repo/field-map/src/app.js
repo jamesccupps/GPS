@@ -1215,18 +1215,57 @@ $('xKml').onclick=()=>{
     'application/vnd.google-earth.kml+xml');
   markExported();
 };
+/* Photos never sync, so this is the only way the photographic record of a
+   monument ever leaves the phone — and it used to fire one programmatic download
+   per photo on a 320 ms timer. Chrome allows a burst inside the originating
+   gesture, but transient activation lasts about 5 s: from roughly the sixteenth
+   photo the downloads were simply dropped on Android, with no prompt, while the
+   counter counted attempts and reported every one as a success. Every object URL
+   was also created and never revoked.
+
+   One archive, one download, one activation. Stored mode (no compression) — JPEG
+   does not deflate usefully anyway, and it keeps this to arithmetic with no
+   dependency. */
+const CRC=(()=>{ const t=new Uint32Array(256);
+  for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=c&1?0xEDB88320^(c>>>1):c>>>1; t[n]=c>>>0; }
+  return t; })();
+function crc32(u8){ let c=0xFFFFFFFF; for(let i=0;i<u8.length;i++) c=CRC[(c^u8[i])&0xFF]^(c>>>8);
+  return (c^0xFFFFFFFF)>>>0; }
+function zipStore(files){                       /* [{name, data:Uint8Array}] */
+  const enc=new TextEncoder(), parts=[], central=[]; let off=0;
+  const u32=v=>[v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255];
+  const u16=v=>[v&255,(v>>>8)&255];
+  files.forEach(f=>{
+    const nm=enc.encode(f.name), c=crc32(f.data), n=f.data.length;
+    const lh=new Uint8Array([80,75,3,4, 20,0, 0,0, 0,0, 0,0, 0,0, ...u32(c), ...u32(n), ...u32(n),
+                             ...u16(nm.length), 0,0]);
+    parts.push(lh, nm, f.data);
+    central.push(new Uint8Array([80,75,1,2, 20,0, 20,0, 0,0, 0,0, 0,0, 0,0, ...u32(c), ...u32(n), ...u32(n),
+                                 ...u16(nm.length), 0,0, 0,0, 0,0, 0,0, 0,0,0,0, ...u32(off)]), nm);
+    off += lh.length + nm.length + n;
+  });
+  const cdOff=off; let cdLen=0; central.forEach(b=>cdLen+=b.length);
+  const eocd=new Uint8Array([80,75,5,6, 0,0, 0,0, ...u16(files.length), ...u16(files.length),
+                             ...u32(cdLen), ...u32(cdOff), 0,0]);
+  return new Blob([...parts, ...central, eocd], {type:'application/zip'});
+}
 $('xPho').onclick=async()=>{
   const keys=await idbKeys('photos')||[];
   if(!keys.length) return toast('No photos yet');
-  let i=0;
+  toast('Packing photos…');
+  const files=[], used={};
   for(const k of keys){
     const r=await idbGet('photos',k); if(!r||!r.full) continue;
     const m=marks.find(x=>(x.photos||[]).includes(k));
-    const a=document.createElement('a'); a.href=URL.createObjectURL(r.full);
-    a.download=((m?m.name:'photo').replace(/[^\w\-]+/g,'_'))+'_'+(++i)+'.jpg'; a.click();
-    await new Promise(r2=>setTimeout(r2,320));
+    let base=((m?m.name:'photo').replace(/[^\w\-]+/g,'_')).slice(0,48)||'photo';
+    used[base]=(used[base]||0)+1;
+    files.push({ name:base+'_'+used[base]+'.jpg', data:new Uint8Array(await r.full.arrayBuffer()) });
   }
-  toast('Downloaded '+i+' photos');
+  if(!files.length) return toast('No photos yet');
+  const u=URL.createObjectURL(zipStore(files));
+  const a=document.createElement('a'); a.href=u; a.download='field-photos.zip'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(u),8000);
+  toast('Downloaded '+files.length+' photos');
 };
 $('xImp').onclick=()=>$('fImp').click();
 $('fImp').onchange=e=>{
