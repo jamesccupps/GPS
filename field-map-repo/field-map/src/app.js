@@ -396,7 +396,7 @@ const DEC_EPOCH=2026.6, DEC_VAL=-14.552, DEC_RATE=0.0897;
    read ~92 ft below every elevation it can be compared against -- including the
    NAVD88 statewide DEM this app draws as its own hillshade. The parcel is 660 ft
    across, so one constant is exact enough. */
-const GEOID_N=-28.0;   /* metres, GEOID18 at Hobart Road */
+const GEOID_N=-28.0;   /* metres, GEOID18 at the parcel */
 function declination(){
   const now=new Date();
   const yr=now.getFullYear()+(now.getMonth()+0.5)/12;

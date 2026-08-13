@@ -1,4 +1,4 @@
-/* Hobart Road field map — offline shell.
+/* Field map — offline shell.
    GitHub Pages serves HTML with Cache-Control: max-age=600, so without this
    the app disappears ten minutes after the last load. Cache-first for the
    shell; map tiles are handled separately by the app's own IndexedDB store. */

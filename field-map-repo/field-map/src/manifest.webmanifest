@@ -1,7 +1,7 @@
 {
   "name": "Field Map",
   "short_name": "Field Map",
-  "description": "Offline survey map for the Hobart Road parcel",
+  "description": "Offline survey map",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",

@@ -37,8 +37,11 @@ END = "/*PARCEL_END*/"
 
 # If any of these survive into the locked file, the lock did not do its job.
 # Deed references and abutter names come from the recorded plan, not the map.
+# The road and town are the whole point of a lock that hides a parcel, and they
+# were not on this list: a comment in app.js naming the road shipped in the clear
+# inside a "locked" file and nothing caught it.
 TELLTALES = ["POINT OF BEGINNING", "Karen S. Pease", "Bk 10912", "Maine W SP ftUS",
-             "iron pipe found", "Course 1 end"]
+             "iron pipe found", "Course 1 end", "Hobart", "Auburn"]
 
 
 def b64(raw: bytes) -> str:
