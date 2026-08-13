@@ -9,6 +9,9 @@
   /* one type scale, so a readable size is a token and not 15 magic numbers.
      Used with cold hands, in gloves, in sun: nothing you must READ is under 12px. */
   --t-key:12px; --t-body:13.5px; --t-num:15px; --t-tab:14px;
+  /* width of the side rail in the wide layout; 0 in the phone layout, so every
+     rule below reduces to the plain centred form without a second declaration */
+  --railW:0px;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--ink);color:var(--paper);
@@ -145,10 +148,11 @@ label.f{display:block;font-size:var(--t-key);letter-spacing:.05em;text-transform
   background:rgba(255,138,61,.94);color:#1a0e04;border-radius:7px;padding:7px 11px;
   font-family:var(--mono);font-size:13px;font-weight:700;display:none}
 #fitbar.on{display:block}
-#xh{position:absolute;left:50%;top:calc(50% - var(--panelH)/2);transform:translate(-50%,-50%);
+#xh{position:absolute;left:calc(var(--railW) + (100% - var(--railW))/2);
+  top:calc(50% - var(--panelH)/2);transform:translate(-50%,-50%);
   z-index:800;pointer-events:none;display:none}
 #xh.on{display:block}
-#toast{position:absolute;left:50%;transform:translateX(-50%);z-index:1200;background:var(--panel2);
+#toast{position:absolute;left:calc(var(--railW) + (100% - var(--railW))/2);transform:translateX(-50%);z-index:1200;background:var(--panel2);
   border:1px solid var(--flag);color:var(--paper);padding:9px 15px;border-radius:7px;font-size:14.5px;
   font-weight:600;bottom:calc(var(--panelH) + 14px);opacity:0;transition:opacity .22s;pointer-events:none;
   max-width:86%;text-align:center}
@@ -172,10 +176,10 @@ label.f{display:block;font-size:var(--t-key);letter-spacing:.05em;text-transform
 .leaflet-popup-content{margin:10px 12px;font-size:var(--t-body);line-height:1.5}
 .leaflet-popup-content b{color:var(--flag)}
 .leaflet-popup-content code{font-family:var(--mono);font-size:12.5px;color:var(--fix)}
-@media (min-width:820px){ :root{--panelH:40vh}
+@media (min-width:820px){ :root{--panelH:40vh; --railW:392px}
   #panel{right:auto;width:392px;height:100%;border-top:0;border-right:1px solid var(--line)}
-  #map,#status{left:392px} #map{bottom:0} #fitbar,#target{left:400px}
-  #toast{left:calc(392px + 50%);bottom:20px} #sheet{left:392px} #xh{top:50%} }
+  #map,#status{left:var(--railW)} #map{bottom:0} #fitbar,#target{left:calc(var(--railW) + 8px)}
+  #toast{bottom:20px} #sheet{left:var(--railW)} #xh{top:50%} }
 
 /* ── floating actions: the two things you do most, always in the thumb zone ── */
 #fabs{position:absolute;right:12px;bottom:var(--fabB);z-index:940;display:flex;flex-direction:column;

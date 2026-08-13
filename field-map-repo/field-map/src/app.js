@@ -490,7 +490,16 @@ const avg={on:false,dur:60000,t0:0,s:[],seen:0,mode:'mark',
   start(mode){ this.on=true;this.mode=mode;this.t0=Date.now();this.s=[];this.seen=0;
     $('avgBox').style.display='block'; $('fApply').disabled=true; holdWake(true); tick();
     toast('Averaging — hold still, phone flat and level'); },
-  push(p){ this.seen++; if(Date.now()-this.t0 >= SETTLE_MS) this.s.push(p); },
+  /* The window is closed by the SAMPLE's own timestamp, not by tick(). Chrome
+     throttles timers in a hidden page to about one a minute and freezes them
+     outright, while watchPosition keeps delivering: switch apps mid-average,
+     pocket the phone and walk to the truck, and every fix along the way used to
+     land in this.s and be averaged in. applyFit() reads exactly this mean to
+     translate the whole parcel. */
+  push(p){ this.seen++;
+    const el=(p.t||Date.now())-this.t0;
+    if(el>=SETTLE_MS && el<=this.dur) this.s.push(p);
+    if(el>=this.dur && this.on) finishAvg(); },
   stop(){ this.on=false; if(!trk.on) holdWake(false); },
   mean(){
     if(!this.s.length) return null;
@@ -514,14 +523,15 @@ function tick(){
   const m=avg.mean();
   if(m){ $('aMean').textContent=m.lat.toFixed(7)+', '+m.lon.toFixed(7);
          $('aRms').textContent=m.rms.toFixed(1)+' ft'; }
-  if(el>=avg.dur){
-    avg.stop();
-    if(!avg.s.length){ toast('No fixes collected — check GPS'); return; }
-    if(avg.mode==='fit'){ $('fApply').disabled=false; toast(`Averaged ${avg.s.length} fixes — now Apply shift`); }
-    else toast(`Averaged ${avg.s.length} fixes — Save as mark`);
-    return;
-  }
+  if(el>=avg.dur){ finishAvg(); return; }
   setTimeout(tick,250);
+}
+function finishAvg(){
+  if(!avg.on) return;
+  avg.stop();
+  if(!avg.s.length){ toast('No fixes collected — check GPS'); return; }
+  if(avg.mode==='fit'){ $('fApply').disabled=false; toast(`Averaged ${avg.s.length} fixes — now Apply shift`); }
+  else toast(`Averaged ${avg.s.length} fixes — Save as mark`);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -574,9 +584,12 @@ let marksLoaded=false;
 try{ marks=JSON.parse(store.get('fm_marks')||'[]'); marksLoaded=true; }catch(e){ marks=[]; }
 const saveMarks=()=>{ const r=store.set('fm_marks',JSON.stringify(marks)); paintBackup(); syQueue(); return r; };
 function paintBackup(){
-  const le=+(store.get('fm_exported_at')||0), n=+(store.get('fm_exported_n')||0);
+  const le=+(store.get('fm_exported_at')||0);
   const el=$('bUnsaved'); if(!el) return;
-  const pending=marks.length-n;
+  /* was marks.length - fm_exported_n: delete two stumps, record two bounds, and
+     the count is unchanged so it read "all exported" while the exported file held
+     the stumps and neither monument. Edits never moved it at all. */
+  const pending=marks.filter(m=>(m.updated||m.t||0)>le).length;
   if(storeBroken){ el.textContent='NOT SAVING — export now'; el.style.color='var(--bad)'; }
   else {
     el.textContent = marks.length===0 ? 'none' : (pending>0? pending+' since last export' : 'all exported');
@@ -604,8 +617,7 @@ if(navigator.storage&&navigator.storage.persist){
     .catch(()=>{ persistOK=false; paintBackup(); });
 }
 
-const markExported=()=>{ store.set('fm_exported_at',String(Date.now()));
-  store.set('fm_exported_n',String(marks.length)); paintBackup(); };
+const markExported=()=>{ store.set('fm_exported_at',String(Date.now())); paintBackup(); };
 /* imported text is untrusted: strip markup and cap length before it is stored */
 function clean(s){ return s==null?'':String(s).replace(/<[^>]*>/g,'').replace(/[\u0000-\u001F]/g,' ').trim().slice(0,300); }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -922,6 +934,10 @@ function applyFit(){
   const v=gridVec(plan[1],plan[0],m.lat,m.lon); shift.dE=v.dE; shift.dN=v.dN;
   store.set('fm_shift',JSON.stringify(shift));
   drawParcel(); paintFit(); paintRel(); reanchorNav();
+  /* Apply stayed enabled and avg.s was never cleared, so an hour later at a
+     different monument you could change the corner and press Apply again,
+     translating by the distance between two monuments. */
+  avg.s=[]; $('fApply').disabled=true;
   toast('Parcel shifted '+v.dist.toFixed(1)+' ft');
 }
 function paintFit(){
@@ -1152,6 +1168,7 @@ $('xKml').onclick=()=>{
   dl('field-data.kml',`<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">`
     +`<Document><name>Field data</name>\n${k}\n</Document></kml>`,
     'application/vnd.google-earth.kml+xml');
+  markExported();
 };
 $('xPho').onclick=async()=>{
   const keys=await idbKeys('photos')||[];
