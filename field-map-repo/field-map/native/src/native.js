@@ -61,7 +61,10 @@
   }
 
   var watchers = {};      // our id -> entry
-  var nextId = 1;
+  /* offset so our ids cannot be mistaken for the platform's, which are also
+     small integers -- a delegated watch and a native one could otherwise
+     collide in clearWatch */
+  var nextId = 900001;
 
   function start(entry, background) {
     var BG = plugin();
@@ -95,11 +98,20 @@
   var geo = {
     watchPosition: function (success, error, options) {
       var entry = { dead: false, id: null, success: success, error: error, background: false };
+      /* If the bridge is not up yet we fall back to the WebView's own
+         geolocation -- but the entry is recorded either way. It previously
+         returned early, so watchers stayed empty, and both promotion paths
+         (rebind and armTrackFollow) key on watchers. A bridge that was merely
+         late meant the APK ran on plain web geolocation for the whole session:
+         GPS fine, track fine, and then it stops the moment the screen sleeps,
+         which is the one thing the APK exists to prevent. Invisible until you
+         look at the evening's track and find a straight line across the swamp. */
       if (!start(entry, false)) {
-        return orig ? orig.watchPosition(success, error, options) : undefined;
+        entry.fallbackId = orig ? orig.watchPosition(success, error, options) : null;
+      } else {
+        entry.native = true;
       }
       var key = nextId++;
-      entry.native = true;
       watchers[key] = entry;
       return key;
     },
@@ -146,8 +158,36 @@
     });
   }
 
+  /* Take over any watcher that had to start on the WebView's geolocation. */
+  function adoptFallbacks() {
+    if (!plugin()) return false;
+    Object.keys(watchers).forEach(function (key) {
+      var entry = watchers[key];
+      if (entry.dead || entry.fallbackId == null) return;
+      if (orig) { try { orig.clearWatch(entry.fallbackId); } catch (e) {} }
+      entry.fallbackId = null;
+      entry.native = true;
+      start(entry, entry.background);
+    });
+    return true;
+  }
+
   function armTrackFollow() {
-    if (!plugin()) return;                       // browser: nothing to promote
+    if (!plugin()) {
+      /* A native build that never resolves the plugin cannot do the one thing
+         it was built for, so say so rather than degrading quietly. */
+      var tries = 0;
+      var poll = setInterval(function () {
+        if (adoptFallbacks()) { clearInterval(poll); armTrackFollow(); return; }
+        if (++tries >= 10) {
+          clearInterval(poll);
+          if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
+            console.error('[native] BackgroundGeolocation never appeared; this APK cannot record in the background');
+        }
+      }, 300);
+      return;
+    }
+    adoptFallbacks();
     var btn = document.getElementById('bTrk');
     if (!btn) {
       console.warn('[native] #bTrk not found; staying in background so tracks are never lost');
