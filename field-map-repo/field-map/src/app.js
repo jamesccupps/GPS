@@ -126,6 +126,7 @@ const idbPut  = (s,k,v) => idb(s,'readwrite', st=>st.put(v,k));
 const idbDel  = (s,k)   => idb(s,'readwrite', st=>st.delete(k));
 const idbKeys = (s)     => idb(s,'readonly',  st=>st.getAllKeys());
 const idbClear= (s)     => idb(s,'readwrite', st=>st.clear());
+const idbCount= (s)     => idb(s,'readonly',  st=>st.count());   /* cacheStats wanted only .length */
 
 /* ══════════════════════════════════════════════════════════════
    4. TILES — every tile checked against IndexedDB first, so a
@@ -277,7 +278,11 @@ function restyleForZoom(){
   mkLayer.eachLayer(fix);
   if(trk.line) trk.line.setStyle({weight:3*k});
 }
-let shift={dLat:0,dLon:0,tie:null,dE:0,dN:0};
+/* Restored here rather than after drawParcel(), which used to re-run it a second
+   time on every boot once a fit was saved: 5,762 vertices built and thrown away
+   and 3,716 toSP calls where 1,858 would do, on the path to first paint. */
+let shift=(()=>{ try{ const v=JSON.parse(store.get('fm_shift')||'null');
+    if(v&&v.tie) return v; }catch(e){} return {dLat:0,dLon:0,tie:null,dE:0,dN:0}; })();
 const sh=p=>[p[1]+shift.dLat, p[0]+shift.dLon];
 
 function drawParcel(){
@@ -552,6 +557,11 @@ const trk={on:false,pts:[],line:null,t0:0,dist:0,moving:0,_wr:0,
       live:this.on,pts:this.pts,saved:now}).catch(()=>{});
   },
   forget(){ this._wr=0; idbDel('tracks',TRK_KEY).catch(()=>{}); },
+  /* setLatLngs(pts.map(...)) rebuilt and re-projected the whole array on every
+     accepted fix -- O(n) per push, O(n^2) over a track, and ~15,000 short-lived
+     objects by the 5,000th point. addLatLng appends. */
+  draw(){ const q=this.pts[this.pts.length-1];
+    if(this.line) this.line.addLatLng([q.lat,q.lon]); },
   start(){ if(this.line) map.removeLayer(this.line);   /* else each restart strands one on the canvas */
     this.on=true;this.pts=[];this.dist=0;this.moving=0;this.t0=Date.now();this._warned=false;
     this.line=L.polyline([],{renderer:canvasR,color:'#B08CFF',weight:3*zScale(),opacity:.9}).addTo(map);
@@ -577,14 +587,13 @@ const trk={on:false,pts:[],line:null,t0:0,dist:0,moving:0,_wr:0,
          straight line through the swamp you walked around. */
       if(dt>30 || d/Math.max(dt,1)>15){
         this.pts.push({lat:p.lat,lon:p.lon,t:p.t,gap:true});
-        this.line.setLatLngs(this.pts.map(q=>[q.lat,q.lon]));
-        this.persist(false);
+        this.draw(); this.persist(false);
         return;
       }
       this.dist+=d;
       if(dt>0) this.moving+=dt;   /* only contiguous motion counts as moving time */ }
     this.pts.push({lat:p.lat,lon:p.lon,t:p.t});
-    this.line.setLatLngs(this.pts.map(q=>[q.lat,q.lon]));
+    this.draw();
     $('kDist').textContent=this.dist.toFixed(0)+' ft ('+(this.dist/5280).toFixed(2)+' mi)';
     $('kPts').textContent=this.pts.length+' pts / '+((Date.now()-this.t0)/60000).toFixed(0)+' min';
     this.persist(false);
@@ -696,6 +705,7 @@ let navRaf=0;
 function scheduleNav(){ if(navRaf) return; navRaf=setTimeout(()=>{navRaf=0;updateNav();},900); }
 function updateNav(){
   if(!me || !$('t-mrk').classList.contains('on')) return;
+  const byId=new Map(marks.map(m=>[m.id,m]));
   $('mList').querySelectorAll('[data-nav]').forEach(el=>{
     const m=marks.find(x=>x.id===el.dataset.nav); if(!m) return;
     const v=gridVec(me.lat,me.lon,m.lat,m.lon);
@@ -726,11 +736,32 @@ function openSheet(id){
   $('shCats').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.c===m.cat));
   paintSheetPhotos();
   $('veil').classList.add('on'); $('sheet').classList.add('on');
+  try{ history.pushState({sheet:1},''); sheetPushed=true; }catch(e){}
 }
-function closeSheet(){ $('veil').classList.remove('on'); $('sheet').classList.remove('on'); shId=null; }
+/* Nothing pushed a history entry, so Back left the page. The documented escape
+   from a keyboard covering Save is one Back press to drop the IME -- and the
+   second, reaching for "close the sheet", exited the app instead, taking the
+   live track, the active target and the note being typed with it.
+
+   fromPop distinguishes "the user pressed Back" (the entry is already gone) from
+   "the user tapped Cancel" (we still owe history a pop). Getting that wrong
+   double-pops and leaves the app anyway. */
+let sheetPushed=false;
+function closeSheet(fromPop){
+  $('veil').classList.remove('on'); $('sheet').classList.remove('on'); shId=null;
+  const owed=sheetPushed && !fromPop;
+  sheetPushed=false;
+  if(owed){ try{ history.back(); }catch(e){} }
+}
+addEventListener('popstate',()=>{
+  if($('sheet').classList.contains('on')){ closeSheet(true); return; }
+  if($('block').classList.contains('on')){ $('block').classList.remove('on'); storeBroken=false; return; }
+  if(tapMode) setTap(false);
+  /* nothing of ours was open: the pop already happened, so do nothing */
+});
 $('shCats').onclick=e=>{ const b=e.target.closest('[data-c]'); if(!b) return;
   $('shCats').querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); };
-$('shX').onclick=closeSheet; $('veil').onclick=closeSheet;
+$('shX').onclick=()=>closeSheet(); $('veil').onclick=()=>closeSheet();
 $('shOK').onclick=()=>{
   const m=marks.find(x=>x.id===shId); if(!m) return closeSheet();
   m.name=$('shName').value.trim()||m.name; m.note=$('shNote').value.trim();
@@ -1003,7 +1034,6 @@ $('fCheck').onclick=()=>{
   toast(v.dist<15?'Check residual '+v.dist.toFixed(1)+' ft — fit looks good'
                  :'Check residual '+v.dist.toFixed(1)+' ft — verify the corner');
 };
-try{ const sv=JSON.parse(store.get('fm_shift')||'null'); if(sv&&sv.tie){ shift=sv; drawParcel(); } }catch(e){}
 paintFit();
 
 /* ══════════════════════════════════════════════════════════════
@@ -1312,8 +1342,7 @@ $('fImp').onchange=e=>{
    16. OFFLINE TILE CACHE
    ══════════════════════════════════════════════════════════════ */
 async function cacheStats(){
-  const keys=await idbKeys('tiles')||[];
-  $('cCnt').textContent=keys.length+' tiles';
+  $('cCnt').textContent=((await idbCount('tiles'))||0)+' tiles';
   if(navigator.storage&&navigator.storage.estimate){
     const e=await navigator.storage.estimate();
     $('cSize').textContent=(e.usage/1048576).toFixed(1)+' MB used';
