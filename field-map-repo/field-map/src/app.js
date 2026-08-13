@@ -20,6 +20,57 @@ function toSP(lat, lon){
   const Nn=k0*(mm(p)-mm(lat0)+N*Math.tan(p)*(A*A/2+(5-T+9*C+4*C*C)*A**4/24+(61-58*T+T*T+600*C-330*ep2)*A**6/720));
   return [E*M2FT, Nn*M2FT];
 }
+/* The inverse of toSP, same Snyder series and the same constants. Additive:
+   toSP is untouched and stays the authority — this is verified BY round-tripping
+   against it, so if the two ever disagree the caller finds out immediately.
+   Needed to turn a deed call (bearing + distance from a known point) back into a
+   position, which is how you stake a corner that is not there any more. */
+function fromSP(Eft, Nft){
+  const a=6378137.0, f=1/298.257222101, e2=f*(2-f);
+  const k0=0.9999666666666667, lat0=42.8333333333*Math.PI/180, lon0=-70.1666666667*Math.PI/180, FE=900000.0;
+  const ep2=e2/(1-e2);
+  const mm=x=>a*((1-e2/4-3*e2**2/64-5*e2**3/256)*x-(3*e2/8+3*e2**2/32+45*e2**3/1024)*Math.sin(2*x)
+    +(15*e2**2/256+45*e2**3/1024)*Math.sin(4*x)-(35*e2**3/3072)*Math.sin(6*x));
+  const E=Eft/M2FT, N=Nft/M2FT;
+  const M=mm(lat0)+N/k0;
+  const mu=M/(a*(1-e2/4-3*e2**2/64-5*e2**3/256));
+  const e1=(1-Math.sqrt(1-e2))/(1+Math.sqrt(1-e2));
+  const p1=mu+(3*e1/2-27*e1**3/32)*Math.sin(2*mu)+(21*e1**2/16-55*e1**4/32)*Math.sin(4*mu)
+    +(151*e1**3/96)*Math.sin(6*mu)+(1097*e1**4/512)*Math.sin(8*mu);
+  const C1=ep2*Math.cos(p1)**2, T1=Math.tan(p1)**2;
+  const N1=a/Math.sqrt(1-e2*Math.sin(p1)**2), R1=a*(1-e2)/Math.pow(1-e2*Math.sin(p1)**2,1.5);
+  const D=(E-FE)/(N1*k0);
+  const lat=p1-(N1*Math.tan(p1)/R1)*(D*D/2-(5+3*T1+10*C1-4*C1*C1-9*ep2)*D**4/24
+    +(61+90*T1+298*C1+45*T1*T1-252*ep2-3*C1*C1)*D**6/720);
+  const lon=lon0+(D-(1+2*T1+C1)*D**3/6
+    +(5-2*C1+28*T1-3*C1*C1+8*ep2+24*T1*T1)*D**5/120)/Math.cos(p1);
+  return [lat*180/Math.PI, lon*180/Math.PI];
+}
+/* A deed call reads "N 34°35'30\" E". Accept that, with or without the symbols,
+   and a plain decimal grid azimuth, because both get typed with cold hands. */
+function parseBearing(str){
+  if(str==null) return null;
+  const t=String(str).trim().toUpperCase().replace(/[°'\"]/g,' ').replace(/\s+/g,' ');
+  if(!t) return null;
+  const q=t.match(/^([NS])\s*([\d.]+)(?:\s+([\d.]+))?(?:\s+([\d.]+))?\s*([EW])$/);
+  if(q){
+    const d=+q[2], m=+(q[3]||0), sec=+(q[4]||0);
+    if(!isFinite(d)||!isFinite(m)||!isFinite(sec)) return null;
+    const ang=d+m/60+sec/3600;
+    if(ang>90.000001) return null;
+    return ((q[1]==='N' ? (q[5]==='E'?ang:360-ang) : (q[5]==='E'?180-ang:180+ang))%360+360)%360;
+  }
+  const dec=t.match(/^([\d.]+)$/);
+  if(dec && isFinite(+dec[1])) return ((+dec[1])%360+360)%360;
+  return null;
+}
+/* Project a grid azimuth and distance from a point, in State Plane feet — the
+   same space gridVec measures in, so a projection and a measurement of the same
+   line agree exactly. */
+function projectSP(lat,lon,az,distFt){
+  const p=toSP(lat,lon), r=az*Math.PI/180;
+  return fromSP(p[0]+Math.sin(r)*distFt, p[1]+Math.cos(r)*distFt);
+}
 function gridVec(lat1,lon1,lat2,lon2){
   const a=toSP(lat1,lon1), b=toSP(lat2,lon2), dE=b[0]-a[0], dN=b[1]-a[1];
   return {dE,dN,dist:Math.hypot(dE,dN),az:(Math.atan2(dE,dN)*180/Math.PI+360)%360};
@@ -664,7 +715,7 @@ function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 
 function addMark(lat,lon,extra={}){
   const m={id:'m'+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
-    name:extra.name||('Mark '+(marks.length+1)),note:'',cat:'Other',lat,lon,
+    name:extra.name||('Mark '+(marks.length+1)),note:extra.note||'',cat:extra.cat||'Other',lat,lon,
     acc:extra.acc??(me?me.acc:null),n:extra.n||1,rms:extra.rms??null,photos:[],t:Date.now(),updated:Date.now()};
   marks.push(m); saveMarks(); drawMarks(); renderList(); openSheet(m.id); return m;
 }
@@ -687,6 +738,7 @@ function visible(){
   return marks.filter(m=>(m.name+' '+m.note+' '+m.cat).toLowerCase().includes(q));
 }
 function renderList(){
+  fillPointSelects();
   const L1=$('mList'), vis=visible();
   if(!vis.length){ L1.innerHTML=`<div class="empty">${marks.length?'Nothing matches that search.'
     :'No marks yet.<br>Use <b>Mark here</b> for your position, or <b>Tap to mark</b> to place one by eye.'}</div>`; return; }
@@ -985,6 +1037,68 @@ async function paintSensors(){
 $('rGo').onclick=()=>{ if(nearCorner) setNav('plan:'+nearCorner.nm,nearCorner.nm,nearCorner.lat,nearCorner.lon); };
 
 /* ══════════════════════════════════════════════════════════════
+   13c. STAKE AND MEASURE
+   Two things the plan gives you that the app could not do: project a recorded
+   call from a corner you can find, to stand where a lost one should be; and
+   measure between two things you have found, to check them against the record.
+   Both work in State Plane feet, so a projection and a measurement of the same
+   line agree exactly, and both agree with the deed.
+   ══════════════════════════════════════════════════════════════ */
+/* One list for every selectable point: where you are, the plan, and your marks. */
+function pointList(withMe){
+  const out=[];
+  if(withMe) out.push({k:'me', label:'My position'});
+  PARCEL.features.filter(f=>f.geometry.type==='Point')
+    .forEach((f,i)=>out.push({k:'plan:'+i, label:f.properties.name}));
+  marks.forEach(m=>out.push({k:'mark:'+m.id, label:m.name}));
+  return out;
+}
+function resolvePoint(key){
+  if(key==='me') return me?[me.lat,me.lon]:null;
+  if(key.indexOf('plan:')===0){
+    const f=PARCEL.features.filter(x=>x.geometry.type==='Point')[+key.slice(5)];
+    return f?sh(f.geometry.coordinates):null;                 /* shifted, like the drawing */
+  }
+  if(key.indexOf('mark:')===0){ const m=marks.find(x=>x.id===key.slice(5)); return m?[m.lat,m.lon]:null; }
+  return null;
+}
+function fillPointSelects(){
+  const opts=list=>list.map(o=>'<option value="'+esc(o.k)+'">'+esc(o.label)+'</option>').join('');
+  const a=$('pjFrom').value, b=$('pjA').value, c=$('pjB').value;
+  const html=opts(pointList(true));
+  $('pjFrom').innerHTML=html; $('pjA').innerHTML=html; $('pjB').innerHTML=html;
+  if(a) $('pjFrom').value=a;
+  if(b) $('pjA').value=b;
+  if(c) $('pjB').value=c;
+  if(!$('pjB').value && $('pjB').options.length>1) $('pjB').selectedIndex=1;
+}
+$('pjGo').onclick=()=>{
+  const from=resolvePoint($('pjFrom').value);
+  if(!from) return toast('No GPS fix yet');
+  const az=parseBearing($('pjBrg').value);
+  if(az==null) return toast('Bearing must read like N 34 35 30 E, or a grid azimuth');
+  const d=parseFloat(String($('pjDist').value).replace(/[^0-9.]/g,''));
+  if(!isFinite(d)||d<=0) return toast('Enter a distance in feet');
+  const ll=projectSP(from[0],from[1],az,d);
+  const label=$('pjFrom').selectedOptions[0].textContent;
+  $('pjOut').textContent=ll[0].toFixed(7)+', '+ll[1].toFixed(7);
+  addMark(ll[0],ll[1],{ name:'Staked '+quad(az)+' '+d.toFixed(2)+' ft',
+    note:'Projected from '+label+' — '+quad(az)+' '+d.toFixed(2)+' ft (grid)',
+    cat:'Monument', acc:null });
+  toast('Staked — navigate to it from the Marks tab');
+};
+function paintMeasure(){
+  const A=resolvePoint($('pjA').value), B=resolvePoint($('pjB').value);
+  if(!A||!B){ $('pjD').textContent=$('pjB2').textContent=$('pjDEN').textContent='—'; return; }
+  const v=gridVec(A[0],A[1],B[0],B[1]);
+  $('pjD').textContent=v.dist.toFixed(2)+' ft'+(v.dist>=1000?'  ('+(v.dist/5280).toFixed(3)+' mi)':'');
+  $('pjB2').textContent=quad(v.az);
+  $('pjDEN').textContent=v.dE.toFixed(2)+' E / '+v.dN.toFixed(2)+' N';
+}
+$('pjA').onchange=paintMeasure; $('pjB').onchange=paintMeasure;
+
+
+/* ══════════════════════════════════════════════════════════════
    14. FIT
    ══════════════════════════════════════════════════════════════ */
 const fitPts=PARCEL.features.filter(f=>f.geometry.type==='Point');
@@ -1011,7 +1125,7 @@ function reanchorNav(){
     navLine.a=[l.a[0]+shift.dLat, l.a[1]+shift.dLon];
     navLine.b=[l.b[0]+shift.dLat, l.b[1]+shift.dLon];
   }
-  paintTarget(); paintLine();
+  paintTarget(); paintLine(); paintMeasure();
 }
 function applyFit(){
   const m=avg.mean(); if(!m) return toast('No averaged position yet');
@@ -1766,6 +1880,7 @@ measurePeek(); setSheet(PEEK,false);
 addEventListener('resize',()=>{ const wasPeek=sheetH<=PEEK+4; measurePeek();
   setSheet(wasPeek?PEEK:Math.min(sheetH,snaps()[2]),false); });
 
+fillPointSelects(); paintMeasure();
 openDB().then(async()=>{
   /* Caches written before the getTileUrl zoom fix hold real imagery of the wrong
      place under every key deeper than the zoom it was cached at. There is no way
