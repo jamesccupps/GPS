@@ -112,7 +112,8 @@ label.f{display:block;font-size:var(--t-key);letter-spacing:.05em;text-transform
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item .nt{font-size:var(--t-body);color:#B8C3D2;margin-top:4px;line-height:1.4}
 .item .acts{display:flex;gap:6px;margin-top:9px}
-.item .acts .btn{padding:9px 6px;font-size:12px;min-height:42px}
+/* 0,3,0 beats .btn.sm's 0,2,0, so these really rendered at 42px */
+.item .acts .btn{padding:11px 6px;font-size:13px;min-height:46px}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block;margin-right:6px;vertical-align:middle}
 .empty{text-align:center;color:var(--muted);font-size:var(--t-body);padding:24px 12px;line-height:1.6}
 
@@ -148,6 +149,10 @@ label.f{display:block;font-size:var(--t-key);letter-spacing:.05em;text-transform
   background:rgba(255,138,61,.94);color:#1a0e04;border-radius:7px;padding:7px 11px;
   font-family:var(--mono);font-size:13px;font-weight:700;display:none}
 #fitbar.on{display:block}
+/* #target is z-index 885 over #fitbar's 880 at the same top offset, so tapping
+   Navigate painted over the SHIFTED reminder and kept it hidden for exactly the
+   session you are reading bearings off a translated parcel. */
+#fitbar.low{top:calc(env(safe-area-inset-top,0px) + var(--topH) + 62px)}
 #xh{position:absolute;left:calc(var(--railW) + (100% - var(--railW))/2);
   top:calc(50% - var(--panelH)/2);transform:translate(-50%,-50%);
   z-index:800;pointer-events:none;display:none}
@@ -182,6 +187,19 @@ label.f{display:block;font-size:var(--t-key);letter-spacing:.05em;text-transform
   #toast{bottom:20px} #sheet{left:var(--railW)} #xh{top:50%} }
 
 /* ── floating actions: the two things you do most, always in the thumb zone ── */
+/* the inline min-height:auto on #zEx defeats input{min-height:var(--tap)}, and
+   this is the control you use to make a stone wall rise out of the hillshade */
+#zEx{-webkit-appearance:none;appearance:none;height:44px;background:transparent;border:0;padding:0}
+#zEx::-webkit-slider-runnable-track{height:8px;border-radius:4px;background:var(--panel2);border:1px solid var(--line)}
+#zEx::-webkit-slider-thumb{-webkit-appearance:none;width:30px;height:30px;border-radius:50%;
+  background:var(--flag);border:0;margin-top:-11px}
+#zEx::-moz-range-track{height:8px;border-radius:4px;background:var(--panel2);border:1px solid var(--line)}
+#zEx::-moz-range-thumb{width:30px;height:30px;border-radius:50%;background:var(--flag);border:0}
+/* a 20px checkbox on the cold-start unlock screen: miss it and you retype the
+   passphrase every time you open the app in the woods */
+.ckrow{display:flex;align-items:center;gap:12px;min-height:48px;font-size:var(--t-body)}
+.ckrow input[type=checkbox]{width:26px;height:26px;min-height:0;flex:none}
+
 #fabs{position:absolute;right:12px;bottom:var(--fabB);z-index:940;display:flex;flex-direction:column;
   gap:11px;align-items:center;transition:bottom .22s cubic-bezier(.22,.61,.36,1)}
 .fab{width:56px;height:56px;border-radius:50%;border:1px solid var(--line);background:rgba(23,28,36,.94);

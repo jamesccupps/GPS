@@ -781,8 +781,10 @@ function paintSheetPhotos(){
 let navT=null;
 /* Exactly one navigation mode at a time; otherwise both write #tDist each fix. */
 function setNav(id,name,lat,lon){ navLine=null; navT={id,name,lat,lon}; $('target').classList.add('on');
-  $('compass').classList.add('low'); $('tName').textContent=name; paintTarget(); renderList(); }
-function clearNav(){ navT=null; navLine=null; $('target').classList.remove('on'); $('compass').classList.remove('low'); renderList(); }
+  $('compass').classList.add('low'); $('fitbar').classList.add('low');
+  $('tName').textContent=name; paintTarget(); renderList(); }
+function clearNav(){ navT=null; navLine=null; $('target').classList.remove('on');
+  $('compass').classList.remove('low'); $('fitbar').classList.remove('low'); renderList(); }
 /* delegated, so a name containing a quote can never terminate a JS string */
 map.on('popupopen',e=>{
   const b=e.popup.getElement()&&e.popup.getElement().querySelector('[data-navplan]');
@@ -828,7 +830,7 @@ $('lGo').onclick=()=>{
   clearNav();
   navT=null;
   navLine={name:l.name, idx:+$('lSel').value,
-           a:[l.a[0]+shift.dLat,l.a[1]+shift.dLon], b:[l.b[0]+shift.dLat,l.b[1]+shift.dLon]}; $('target').classList.add('on'); $('compass').classList.add('low');
+           a:[l.a[0]+shift.dLat,l.a[1]+shift.dLon], b:[l.b[0]+shift.dLat,l.b[1]+shift.dLon]}; $('target').classList.add('on'); $('compass').classList.add('low'); $('fitbar').classList.add('low');
   $('tName').textContent=l.name; buzz(12); paintLine(); toast('Following line');
 };
 function paintLine(){
