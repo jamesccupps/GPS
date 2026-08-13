@@ -103,10 +103,11 @@ let db=null;
 function openDB(){
   return new Promise(res=>{
     if(!window.indexedDB) return res(null);
-    const r=indexedDB.open('fieldmap',1);
+    const r=indexedDB.open('fieldmap',2);
     r.onupgradeneeded=e=>{ const d=e.target.result;
       if(!d.objectStoreNames.contains('photos')) d.createObjectStore('photos');
-      if(!d.objectStoreNames.contains('tiles'))  d.createObjectStore('tiles'); };
+      if(!d.objectStoreNames.contains('tiles'))  d.createObjectStore('tiles');
+      if(!d.objectStoreNames.contains('tracks')) d.createObjectStore('tracks'); };
     r.onsuccess=e=>{ db=e.target.result; res(db); };
     r.onerror=()=>res(null);
   });
@@ -491,8 +492,23 @@ function tick(){
 /* ══════════════════════════════════════════════════════════════
    10. TRACK
    ══════════════════════════════════════════════════════════════ */
-const trk={on:false,pts:[],line:null,t0:0,dist:0,moving:0,
-  start(){ this.on=true;this.pts=[];this.dist=0;this.moving=0;this.t0=Date.now();
+/* The track was the one thing here held only in RAM, and "Back to start" -- the
+   get-out-of-the-woods feature -- is backed by trk.pts[0]. Android suspends the
+   page when the screen sleeps and a suspend can become a discard, which took the
+   whole track and the way back with it. IndexedDB rather than localStorage: an
+   all-day track is ~120 KB and would compete for the quota that protects marks. */
+const TRK_KEY='live';
+const trk={on:false,pts:[],line:null,t0:0,dist:0,moving:0,_wr:0,
+  persist(force){
+    const now=Date.now();
+    if(!force && now-this._wr<15000) return;         /* 15 s ceiling, not per fix */
+    this._wr=now;
+    idbPut('tracks',TRK_KEY,{t0:this.t0,dist:this.dist,moving:this.moving,
+      live:this.on,pts:this.pts,saved:now}).catch(()=>{});
+  },
+  forget(){ this._wr=0; idbDel('tracks',TRK_KEY).catch(()=>{}); },
+  start(){ if(this.line) map.removeLayer(this.line);   /* else each restart strands one on the canvas */
+    this.on=true;this.pts=[];this.dist=0;this.moving=0;this.t0=Date.now();
     this.line=L.polyline([],{renderer:canvasR,color:'#B08CFF',weight:3*zScale(),opacity:.9}).addTo(map);
     this.line._bW=3;
     $('trkBox').style.display='block'; $('bTrk').textContent='Stop track';
@@ -507,8 +523,10 @@ const trk={on:false,pts:[],line:null,t0:0,dist:0,moving:0,
     this.line.setLatLngs(this.pts.map(q=>[q.lat,q.lon]));
     $('kDist').textContent=this.dist.toFixed(0)+' ft ('+(this.dist/5280).toFixed(2)+' mi)';
     $('kPts').textContent=this.pts.length+' pts / '+((Date.now()-this.t0)/60000).toFixed(0)+' min';
+    this.persist(false);
   },
-  stop(){ this.on=false; if(!avg.on) holdWake(false); $('bTrk').textContent='Record track'; $('bTrk').classList.remove('rec'); }};
+  stop(){ this.on=false; if(!avg.on) holdWake(false); $('bTrk').textContent='Record track';
+    $('bTrk').classList.remove('rec'); this.persist(true); }};
 
 /* ══════════════════════════════════════════════════════════════
    11. MARKS
@@ -1344,14 +1362,23 @@ $('fAvg').onclick=()=>avg.start('fit');
 $('fApply').onclick=applyFit;
 $('fClear').onclick=()=>{ shift={dLat:0,dLon:0,tie:null,dE:0,dN:0}; store.set('fm_shift','null');
   drawParcel(); paintFit(); paintRel(); reanchorNav(); toast('Shift cleared'); };
-$('bTrk').onclick=()=>{ if(trk.on){ trk.stop(); toast('Track stopped — save or discard'); } else trk.start(); };
+$('bTrk').onclick=()=>{
+  if(trk.on){ trk.stop(); toast('Track stopped — save or discard'); return; }
+  /* the old build zeroed pts unconditionally: one tap and the morning was gone */
+  if(trk.pts.length>1 && !confirm('Discard the unsaved track ('+trk.pts.length+' points)?')) return;
+  trk.start();
+};
 $('kSave').onclick=()=>{ if(trk.pts.length<2) return toast('Track too short');
   dl('field-track.geojson',JSON.stringify({type:'FeatureCollection',features:[{type:'Feature',
     geometry:{type:'LineString',coordinates:trk.pts.map(p=>[p.lon,p.lat])},
     properties:{distance_ft:+trk.dist.toFixed(0),points:trk.pts.length,
-      started:new Date(trk.t0).toISOString()}}]},null,2),'application/geo+json'); };
-$('kDrop').onclick=()=>{ trk.stop(); if(trk.line) map.removeLayer(trk.line);
-  trk.pts=[]; trk.dist=0; $('trkBox').style.display='none'; toast('Track discarded'); };
+      started:new Date(trk.t0).toISOString()}}]},null,2),'application/geo+json');
+  trk.forget(); };
+$('kDrop').onclick=()=>{
+  if(trk.pts.length>1 && !confirm('Discard this track ('+trk.pts.length+' points)? There is no undo.')) return;
+  trk.stop(); if(trk.line) map.removeLayer(trk.line);
+  trk.pts=[]; trk.dist=0; trk.moving=0;   /* moving was left set, so Trip reported minutes against no distance */
+  trk.forget(); $('trkBox').style.display='none'; toast('Track discarded'); };
 
 let tapMode=false;
 function setTap(on){
@@ -1456,6 +1483,25 @@ openDB().then(async()=>{
     store.set('fm_tilez','2');
   }
   drawMarks(); renderList(); cacheStats(); paintBackup();
+
+  /* Recover a track the browser was killed in the middle of. Restored stopped,
+     not resumed: the points and the way back are what matter, and silently
+     re-arming a recording the user did not ask for is worse than a toast.
+     18 hours so yesterday's forgotten track cannot reappear on a new trip. */
+  try{
+    const t=await idbGet('tracks',TRK_KEY);
+    if(t && t.pts && t.pts.length>1 && Date.now()-t.t0 < 18*3600e3){
+      trk.pts=t.pts; trk.dist=t.dist||0; trk.moving=t.moving||0; trk.t0=t.t0; trk.on=false;
+      if(trk.line) map.removeLayer(trk.line);
+      trk.line=L.polyline(trk.pts.map(q=>[q.lat,q.lon]),
+        {renderer:canvasR,color:'#B08CFF',weight:3*zScale(),opacity:.9}).addTo(map);
+      trk.line._bW=3;
+      $('trkBox').style.display='block';
+      $('kDist').textContent=trk.dist.toFixed(0)+' ft ('+(trk.dist/5280).toFixed(2)+' mi)';
+      $('kPts').textContent=trk.pts.length+' pts / '+((Date.now()-trk.t0)/60000).toFixed(0)+' min';
+      toast('Recovered an unsaved track — '+trk.pts.length+' points');
+    } else if(t) { trk.forget(); }
+  }catch(e){}
   HASS = await detectHass();
   if(HASS){ SY.auto=true; }
   syPaint(); syLabel();
