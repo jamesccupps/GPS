@@ -19,6 +19,7 @@ Two changes are made to the built HTML, both one line each:
     happily serve a stale app across an update.
 """
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -36,8 +37,33 @@ WWW = HERE / "www"
 # geolocation" or "wait, because the WebView's own geolocation has no
 # permission plumbing on Android".
 NL = chr(10)
-TAG = ("<script>window.__FIELDMAP_NATIVE__=1</script>" + NL +
-       '<script src="native.js"></script>' + NL)
+
+
+def build_id() -> str:
+    """Short identity for the payload, reported by the status line.
+
+    The APK cannot be updated in place until it has a stable signing key, so a
+    refused install leaves the previous build on the handset looking exactly
+    like the new one. Without this, "it still does not work" and "the fix never
+    reached the phone" are indistinguishable, and both cost a round trip.
+
+    Derived from the commit, not the clock, so two builds of the same clean tree
+    still produce byte-identical output.
+    """
+    sha = os.environ.get("GITHUB_SHA", "")
+    if not sha:
+        try:
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(WEB),
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:
+            sha = ""
+    return sha[:7] or "local"
+
+
+def tag() -> str:
+    return ("<script>window.__FIELDMAP_NATIVE__=1;"
+            "window.__FIELDMAP_BUILD__=" + repr(build_id()) + ";</script>" + NL +
+            '<script src="native.js"></script>' + NL)
 
 
 def assemble(run_build: bool) -> None:
@@ -54,7 +80,7 @@ def assemble(run_build: bool) -> None:
     anchor = '<meta charset="utf-8">\n'
     if anchor not in html:
         sys.exit("could not find the charset meta to anchor the shim to")
-    html = html.replace(anchor, anchor + TAG, 1)
+    html = html.replace(anchor, anchor + tag(), 1)
 
     # 'sw.js' -> '' makes register() reject, and loader.js already swallows that.
     html, n = re.subn(r"navigator\.serviceWorker\.register\('sw\.js'\)",

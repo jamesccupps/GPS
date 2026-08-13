@@ -370,6 +370,7 @@
 
   function startNative() {
     injectDiag();                             // APK only; tells us what is actually wrong
+    watchTray();                              // APK only; counts what the tray receives
     if (window.__FIELDMAP_NATIVE__) {
       ensurePermission().then(function (st) {
         if (st !== 'granted') lastGeoErr = 'location ' + st;
@@ -400,6 +401,33 @@
   var IN_APK = !!window.__FIELDMAP_NATIVE__;
   var diagEl = null, diagMode = 0;
 
+  /* Tray telemetry. "The tray does nothing" has three very different causes and
+     they are indistinguishable by eye: the touches never arrive, or they arrive
+     and the gesture is cancelled before a click can be synthesised, or a click
+     fires and the handler does nothing. Counting them on #panel separates the
+     three in one glance, and records what was actually under the finger --
+     hit-testing landing somewhere other than where the button is drawn looks
+     identical to a dead button. */
+  var tray = { s: 0, m: 0, e: 0, c: 0, k: 0, hit: '' };
+  function watchTray() {
+    var panel = document.getElementById('panel');
+    if (!IN_APK || !panel) return;
+    var kinds = { touchstart: 's', touchmove: 'm', touchend: 'e', touchcancel: 'c', click: 'k' };
+    Object.keys(kinds).forEach(function (type) {
+      panel.addEventListener(type, function (e) {
+        tray[kinds[type]]++;
+        if (type === 'touchstart' || type === 'click') {
+          var t = e.target || {};
+          tray.hit = String(t.tagName || '?').toLowerCase()
+                   + (t.id ? '#' + t.id : '')
+                   + (t.className && t.className.baseVal === undefined
+                      ? '.' + String(t.className).trim().split(/\s+/).join('.') : '');
+          if (tray.hit.length > 28) tray.hit = tray.hit.slice(0, 28);
+        }
+      }, true);
+    });
+  }
+
   function diagText() {
     var cap = window.Capacitor;
     var bridge = cap ? (cap.isNativePlatform && cap.isNativePlatform() ? 'native' : 'web') : 'none';
@@ -411,8 +439,15 @@
            + (lastGeoErr ? ' · ' + lastGeoErr : '')
            + (lastAppErr ? ' · ' + lastAppErr : '');
     }
-    return 'bridge ' + bridge + ' · geo plugin ' + bg + ' · sensors ' + fs
-         + ' · fixes ' + fixCount + ' · inset ' + insetBottom() + 'px';
+    if (diagMode === 1) {
+      return 'bridge ' + bridge + ' · geo plugin ' + bg + ' · sensors ' + fs
+           + ' · fixes ' + fixCount + ' · inset ' + insetBottom() + 'px'
+           + ' · build ' + (window.__FIELDMAP_BUILD__ || '?');
+    }
+    /* down/move/up/cancel/click, then what was under the finger */
+    return 'tray  down ' + tray.s + ' · move ' + tray.m + ' · up ' + tray.e
+         + ' · cancel ' + tray.c + ' · CLICK ' + tray.k
+         + (tray.hit ? ' · ' + tray.hit : '');
   }
   function insetBottom() {
     var v = getComputedStyle(document.documentElement).getPropertyValue('--sab').trim();
@@ -431,8 +466,10 @@
     var press = 0;
     diagEl.addEventListener('touchstart', function () { press = Date.now(); }, { passive: true });
     diagEl.addEventListener('click', function () {
-      if (Date.now() - press > 600) { diagEl.remove(); diagEl = null; return; }
-      diagMode = (diagMode + 1) % 2; paintDiag();
+      /* press stays 0 until a touch sets it, and 0 makes every click look like a
+         56-year long-press -- so any click arriving without one hid the line. */
+      if (press && Date.now() - press > 600) { diagEl.remove(); diagEl = null; return; }
+      diagMode = (diagMode + 1) % 3; paintDiag();
     });
     document.body.appendChild(diagEl);
     paintDiag();

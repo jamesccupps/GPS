@@ -85,9 +85,21 @@ at all, and `apk.yml` refers to the debug APK path in several places.
 
 The native sensors are compile-verified by CI and browser-verified for the
 no-plugin path, but **no sensor here has run on a real handset**. The APK carries
-an on-screen status line under the top bar: fix count and age, and on tap the
-bridge / plugin / sensor / inset state. Long-press dismisses it. What it reads on
-first launch is the fastest way to confirm or kill the remaining diagnosis.
+an on-screen status line under the top bar. Tap to cycle three modes, long-press
+to dismiss:
+
+1. fix count and age, plus any error -- including `app threw: ...` if app.js
+   raised inside the position callback, which is otherwise swallowed whole
+2. bridge / plugin / sensor / inset state, **and the build id**
+3. `tray down/move/up/cancel/CLICK` counted on `#panel`, and what was under
+   the finger
+
+Mode 2 exists because the APK cannot be updated in place yet, so a refused
+install leaves the old build on the phone looking exactly like the new one --
+`build` against `git log` settles it before anyone debugs a fix that never
+landed. Mode 3 separates the three indistinguishable causes of "the tray does
+nothing": touches never arriving, arriving and being cancelled, or a click
+firing into a handler that does nothing.
 
 ---
 
