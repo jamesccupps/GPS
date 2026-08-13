@@ -140,10 +140,16 @@ label.f{display:block;font-size:var(--t-key);letter-spacing:.05em;text-transform
   touch-action:manipulation}
 .cats button.on{border-color:var(--flag);background:#211a12;color:var(--flag)}
 .phs{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}
-.phs .p{position:relative}
+/* the X used to be 21px at top:-6px;right:-6px, overlapping the thumbnail it
+   sits on and winning hit-testing over the photo's own tap handler — with a
+   gloved contact patch around 60px */
+/* the gutter must be at least the button's own width, or its corner still lands
+   on the image and wins hit-testing over the photo's tap handler */
+.phs .p{position:relative;padding:0 34px 0 0}
 .phs img{width:66px;height:66px;object-fit:cover;border-radius:6px;border:1px solid var(--line);display:block}
-.phs .rm{position:absolute;top:-6px;right:-6px;width:21px;height:21px;border-radius:50%;background:var(--bad);
-  color:#fff;border:0;font-size:13px;line-height:1;cursor:pointer;font-weight:700}
+.phs .rm{position:absolute;top:0;right:0;width:32px;height:32px;border-radius:50%;background:var(--bad);
+  color:#fff;border:0;font-size:15px;line-height:1;cursor:pointer;font-weight:700;padding:0}
+.phs .rm.armed{width:auto;padding:0 10px;height:32px;border-radius:16px;font-size:12px}
 
 #fitbar{position:absolute;left:8px;right:8px;z-index:880;top:calc(env(safe-area-inset-top,0px) + var(--topH));
   background:rgba(255,138,61,.94);color:#1a0e04;border-radius:7px;padding:7px 11px;

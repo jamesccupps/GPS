@@ -698,7 +698,7 @@ $('xTog').onclick=()=>{ const b=$('xBox'), on=b.style.display==='none';
 /* ══════════════════════════════════════════════════════════════
    12. EDIT SHEET — replaces three stacked window.prompt() calls
    ══════════════════════════════════════════════════════════════ */
-let shId=null, shPhotos=[];
+let shId=null, shPhotos=[], pendingPurge=null;
 $('shCats').innerHTML=Object.keys(CATS).map(c=>`<button data-c="${c}">${c}</button>`).join('');
 function openSheet(id){
   const m=marks.find(x=>x.id===id); if(!m) return;
@@ -716,19 +716,27 @@ $('shOK').onclick=()=>{
   const m=marks.find(x=>x.id===shId); if(!m) return closeSheet();
   m.name=$('shName').value.trim()||m.name; m.note=$('shNote').value.trim();
   const sel=$('shCats').querySelector('button.on'); if(sel) m.cat=sel.dataset.c;
+  (m.photos||[]).forEach(pid=>{ if(shPhotos.indexOf(pid)<0) idbDel('photos',pid).catch(()=>{}); });
   m.photos=shPhotos.slice(); m.updated=Date.now();
   saveMarks(); drawMarks(); renderList(); closeSheet(); toast('Saved');
 };
 $('shDel').onclick=()=>{
   const m=marks.find(x=>x.id===shId); if(!m) return;
   lastDeleted=JSON.parse(JSON.stringify(m));
-  (m.photos||[]).forEach(pid=>idbDel('photos',pid).catch(()=>{}));   /* don't leak blobs */
+  /* Blobs used to go here, one line before a toast offering Undo. Undo restored
+     the mark JSON pointing at dead keys: blank thumbnails, and an export
+     claiming "photos: 2" for a mark with none. Photos never sync, so the device
+     held the only copy. Purge the PREVIOUS deletion instead, and let the boot
+     sweep reclaim whatever the session leaves behind. */
+  if(pendingPurge) pendingPurge.forEach(pid=>idbDel('photos',pid).catch(()=>{}));
+  pendingPurge=(m.photos||[]).slice();
   graveyard.push({id:shId, updated:Date.now()}); saveGrave();        /* tombstone so the delete syncs */
   marks=marks.filter(x=>x.id!==shId);
   if(navT&&navT.id===shId) clearNav();
   saveMarks(); drawMarks(); renderList(); closeSheet(); toast('Deleted — Undo in Marks tab');
 };
 $('xUndo').onclick=()=>{ if(!lastDeleted) return toast('Nothing to undo');
+  pendingPurge=null;                       /* its blobs are wanted again */
   graveyard=graveyard.filter(t=>t.id!==lastDeleted.id); saveGrave();
   lastDeleted.updated=Date.now(); marks.push(lastDeleted); lastDeleted=null; saveMarks(); drawMarks(); renderList(); toast('Restored'); };
 
@@ -755,8 +763,12 @@ $('shFile').onchange=async e=>{
     const pid='p'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
     const hd=magHeading!=null?((magHeading+declination())%360+360)%360:null;
     await idbPut('photos',pid,{mark:shId,full,thumb,t:Date.now(),heading:hd});
-    if(hd!=null){ const mm=marks.find(x=>x.id===shId);
-      if(mm && !/looking/i.test(mm.note)) mm.note=(mm.note?mm.note+' ':'')+'[photo looking '+quad(hd)+']'; }
+    /* Appended to the textarea, not to the live mark. It used to mutate mm.note
+       directly, and then Save assigned m.note from a textarea populated before
+       the photo was taken -- so saving wiped the heading note and cancelling
+       kept it. Exactly backwards. */
+    if(hd!=null && !/looking/i.test($('shNote').value))
+      $('shNote').value=($('shNote').value?$('shNote').value+' ':'')+'[photo looking '+quad(hd)+']';
     shPhotos.push(pid);
   }
   e.target.value=''; paintSheetPhotos(); toast('Photo added');
@@ -767,7 +779,17 @@ function paintSheetPhotos(){
     const d=document.createElement('div'); d.className='p';
     const im=document.createElement('img'); const rm=document.createElement('button');
     rm.className='rm'; rm.textContent='×';
-    rm.onclick=()=>{ shPhotos=shPhotos.filter(x=>x!==pid); idbDel('photos',pid); paintSheetPhotos(); };
+    /* Staged, not immediate. Fat-finger the wrong X, hit Cancel, and the blob
+       used to be gone anyway while the mark still listed it. Two taps, because
+       there is no undo for a photo. */
+    rm.onclick=()=>{
+      if(!rm.classList.contains('armed')){
+        rm.classList.add('armed'); rm.textContent='Delete?';
+        setTimeout(()=>{ rm.classList.remove('armed'); rm.textContent='×'; },3000);
+        return;
+      }
+      shPhotos=shPhotos.filter(x=>x!==pid); paintSheetPhotos();
+    };
     idbGet('photos',pid).then(r=>{ if(r&&r.thumb){ const u=URL.createObjectURL(r.thumb); liveURLs.push(u); im.src=u; } });
     im.onclick=()=>idbGet('photos',pid).then(r=>{ if(r&&r.full){ const u=URL.createObjectURL(r.full);
       window.open(u); setTimeout(()=>URL.revokeObjectURL(u),60000); } });
