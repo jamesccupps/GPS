@@ -466,6 +466,20 @@ function xtrack(A,B,P){
 let me=null, meMk=null, meAcc=null;
 function onPos(p){
   const c=p.coords;
+  /* A fix with no usable accuracy is not one you can survey with, and taking it
+     anyway fails twice over: Leaflet throws outright on a NaN circle radius, so
+     onPos died before painting anything while fixes kept arriving -- dead
+     readouts above a live counter -- and a NaN would poison the inverse-variance
+     weighting in avg.push(), returning an averaged mark that is quietly NaN.
+     Refuse it where it can still be reported.
+
+     Note the typeof: isFinite(null) is true, because Number(null) is 0, so a
+     null latitude sails through a bare isFinite check and takes Leaflet down
+     one line later instead. */
+  const num=v=>typeof v==='number'&&isFinite(v);
+  if(!num(c.latitude)||!num(c.longitude)||!num(c.accuracy)||c.accuracy<0){
+    onErr({code:2,message:'fix arrived without a usable position or accuracy'}); return;
+  }
   me={lat:c.latitude,lon:c.longitude,acc:c.accuracy,alt:c.altitude,spd:c.speed,
       hdg:(c.heading!=null&&!isNaN(c.heading)&&c.speed>0.4)?c.heading:null,t:p.timestamp};
   if(!meMk){

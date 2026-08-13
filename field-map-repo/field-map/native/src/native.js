@@ -28,7 +28,7 @@
   'use strict';
 
   var orig = navigator.geolocation;          // may be undefined; guarded below
-  var fixCount = 0, lastFixAt = 0, lastGeoErr = '';   // surfaced by the status line
+  var fixCount = 0, lastFixAt = 0, lastGeoErr = '', lastAppErr = '';   // surfaced by the status line
 
   function plugin() {
     var cap = window.Capacitor;
@@ -98,7 +98,18 @@
 
   var geo = {
     watchPosition: function (success, error, options) {
-      var counted = function (pos) { fixCount++; lastFixAt = Date.now(); if (success) success(pos); };
+      /* An exception thrown by app.js in here is otherwise invisible: it unwinds
+         into the plugin's callback, which swallows it, and the next fix arrives
+         as if nothing happened. The counter climbs while every readout stays
+         blank -- which is precisely what "the GPS isn't working" looked like on
+         the first handset, and it cost a build round-trip to find. Catch it and
+         put it on the screen. */
+      var counted = function (pos) {
+        fixCount++; lastFixAt = Date.now();
+        if (!success) return;
+        try { success(pos); }
+        catch (e) { lastAppErr = 'app threw: ' + ((e && e.message) || e); }
+      };
       var failed  = function (e) { lastGeoErr = 'error ' + (e && e.code); if (error) error(e); };
       var entry = { dead: false, id: null, success: counted, error: failed, background: false };
       var key = nextId++;
@@ -397,7 +408,8 @@
     var age = lastFixAt ? Math.round((Date.now() - lastFixAt) / 1000) + 's' : 'never';
     if (diagMode === 0) {
       return 'GPS ' + (fixCount ? fixCount + ' fixes, ' + age : 'no fix yet')
-           + (lastGeoErr ? ' · ' + lastGeoErr : '');
+           + (lastGeoErr ? ' · ' + lastGeoErr : '')
+           + (lastAppErr ? ' · ' + lastAppErr : '');
     }
     return 'bridge ' + bridge + ' · geo plugin ' + bg + ' · sensors ' + fs
          + ' · fixes ' + fixCount + ' · inset ' + insetBottom() + 'px';
