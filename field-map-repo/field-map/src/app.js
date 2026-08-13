@@ -670,6 +670,22 @@ let marks=[], mkLayer=L.layerGroup().addTo(map), lastDeleted=null, showLabels=tr
 const liveURLs=[];   /* object URLs owned by the current list render */
 let marksLoaded=false;
 try{ marks=JSON.parse(store.get('fm_marks')||'[]'); marksLoaded=true; }catch(e){ marks=[]; }
+
+/* A phone that goes flat in the cold and restarts off a battery pack comes up
+   with whatever the RTC held, and there is no signal at the parcel for NTP to
+   correct it. The merge is last-writer-wins on this number, so a morning stamped
+   in the past loses every contest it enters the moment you drive into coverage --
+   including against tombstones, which silently deletes it. The toast still says
+   "Synced 34 marks".
+
+   Stamp monotonically instead: never issue a timestamp older than one already
+   issued, so today's work cannot be older than yesterday's whatever the clock
+   says. Seeded from the newest record we hold. */
+let lastStamp=marks.reduce((a,m)=>Math.max(a, m.updated||m.t||0), 0);
+function stamp(){ lastStamp=Math.max(Date.now(), lastStamp+1); return lastStamp; }
+/* Only reports a clock that is BEHIND our own records; a fast clock still
+   orders correctly, it just makes daylight and export dates wrong. */
+const clockBehind=()=>lastStamp>0 && Date.now()<lastStamp-60000;
 const saveMarks=()=>{ const r=store.set('fm_marks',JSON.stringify(marks)); paintBackup(); syQueue(); return r; };
 function paintBackup(){
   const le=+(store.get('fm_exported_at')||0);
@@ -692,6 +708,23 @@ function paintBackup(){
    true, and store.set() only raises the banner when it is false — so one gloved
    tap made every subsequent failed save silent for the rest of the day. */
 $('bDismiss').onclick=()=>{ $('block').classList.remove('on'); storeBroken=false; };
+
+/* Nothing anywhere cleared fm_pass, and the same string is silently promoted to
+   the sync encryption key and written a second time inside fm_sync beside the
+   GitHub token. Storing it is defensible on a screen-locked phone -- if someone
+   can read localStorage the app auto-unlocks for them anyway -- but being
+   irreversible is not: hand the phone to a contractor, sell it, or send it for
+   warranty, and the only remedy was Chrome's Clear data, which also destroys
+   every mark, the fit and an evening's tile cache. */
+$('lkForget').onclick=()=>{
+  let had=false;
+  try{ had=localStorage.getItem('fm_pass')!=null; localStorage.removeItem('fm_pass'); }catch(e){}
+  delete mem['fm_pass'];
+  window.__PASS__=null;
+  if(SY&&SY.pass) SY.pass='';
+  try{ store.set('fm_sync', JSON.stringify(Object.assign({}, SY, {pass:''}))); }catch(e){}
+  toast(had?'Passphrase forgotten — you will be asked next launch':'No saved passphrase');
+};
 
 /* Chrome may evict IndexedDB and localStorage under storage pressure, and this
    app's own tile cache is what creates that pressure. Ask once; an installed
@@ -716,7 +749,7 @@ function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 function addMark(lat,lon,extra={}){
   const m={id:'m'+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
     name:extra.name||('Mark '+(marks.length+1)),note:extra.note||'',cat:extra.cat||'Other',lat,lon,
-    acc:extra.acc??(me?me.acc:null),n:extra.n||1,rms:extra.rms??null,photos:[],t:Date.now(),updated:Date.now()};
+    acc:extra.acc??(me?me.acc:null),n:extra.n||1,rms:extra.rms??null,photos:[],t:stamp(),updated:lastStamp};
   marks.push(m); saveMarks(); drawMarks(); renderList(); openSheet(m.id); return m;
 }
 function drawMarks(){
@@ -831,7 +864,7 @@ $('shOK').onclick=()=>{
   m.name=$('shName').value.trim()||m.name; m.note=$('shNote').value.trim();
   const sel=$('shCats').querySelector('button.on'); if(sel) m.cat=sel.dataset.c;
   (m.photos||[]).forEach(pid=>{ if(shPhotos.indexOf(pid)<0) idbDel('photos',pid).catch(()=>{}); });
-  m.photos=shPhotos.slice(); m.updated=Date.now();
+  m.photos=shPhotos.slice(); m.updated=stamp();
   saveMarks(); drawMarks(); renderList(); closeSheet(); toast('Saved');
 };
 $('shDel').onclick=()=>{
@@ -844,7 +877,7 @@ $('shDel').onclick=()=>{
      sweep reclaim whatever the session leaves behind. */
   if(pendingPurge) pendingPurge.forEach(pid=>idbDel('photos',pid).catch(()=>{}));
   pendingPurge=(m.photos||[]).slice();
-  graveyard.push({id:shId, updated:Date.now()}); saveGrave();        /* tombstone so the delete syncs */
+  graveyard.push({id:shId, updated:stamp()}); saveGrave();        /* tombstone so the delete syncs */
   marks=marks.filter(x=>x.id!==shId);
   if(navT&&navT.id===shId) clearNav();
   saveMarks(); drawMarks(); renderList(); closeSheet(); toast('Deleted — Undo in Marks tab');
@@ -852,7 +885,7 @@ $('shDel').onclick=()=>{
 $('xUndo').onclick=()=>{ if(!lastDeleted) return toast('Nothing to undo');
   pendingPurge=null;                       /* its blobs are wanted again */
   graveyard=graveyard.filter(t=>t.id!==lastDeleted.id); saveGrave();
-  lastDeleted.updated=Date.now(); marks.push(lastDeleted); lastDeleted=null; saveMarks(); drawMarks(); renderList(); toast('Restored'); };
+  lastDeleted.updated=stamp(); marks.push(lastDeleted); lastDeleted=null; saveMarks(); drawMarks(); renderList(); toast('Restored'); };
 
 /* photos: resized on device, stored as blobs in IndexedDB */
 function resize(file,max,q){
@@ -1272,6 +1305,7 @@ function syClean(x){
 }
 function syMerge(lm,lg,rm,rg){
   rm=(rm||[]).map(syClean).filter(Boolean);
+  rm.forEach(x=>{ lastStamp=Math.max(lastStamp, x.updated||x.t||0); });
   rg=(rg||[]).filter(t=>t&&typeof t.id==='string'&&isFinite(Number(t.updated)));
   const g=new Map();
   [...(lg||[]),...(rg||[])].forEach(t=>{ const c=g.get(t.id); if(!c||t.updated>c.updated) g.set(t.id,t); });
@@ -1292,7 +1326,7 @@ async function syncNow(quiet){
     let {sha,data}=await syGet();
     const merged=syMerge(marks,graveyard,data&&data.marks,data&&data.graveyard);
     marks=merged.marks; graveyard=merged.graveyard;
-    await syPut({v:1,marks,graveyard,updated:Date.now()}, sha);
+    await syPut({v:1,marks,graveyard,updated:stamp()}, sha);
     syApplying=true;                       /* these writes are the sync's own, do not re-arm it */
     try{ saveMarks(); saveGrave(); } finally { syApplying=false; }
     drawMarks(); renderList();
@@ -1888,6 +1922,13 @@ openDB().then(async()=>{
   if(store.get('fm_tilez')!=='2'){
     try{ await idbClear('tiles'); }catch(e){}
     store.set('fm_tilez','2');
+  }
+  if(clockBehind()){
+    $('bTitle').textContent='This phone’s clock is wrong';
+    $('bBody').innerHTML='The clock reads earlier than marks you already have — usually a flat '
+      +'battery in the cold. Marks are still recorded in the right order, but <b>sunset and export '
+      +'dates will be wrong</b> until it corrects itself in coverage.';
+    $('block').classList.add('on');
   }
   drawMarks(); renderList(); cacheStats(); paintBackup();
 

@@ -314,6 +314,7 @@
       <div class="fld" style="margin-top:10px"><label class="f">Lock a copy with a passphrase</label>
         <input id="lkNew" type="password" placeholder="New passphrase" autocomplete="new-password"></div>
       <div class="row"><button class="btn sm" id="lkMake">Download locked copy</button></div>
+      <div class="row"><button class="btn sm" id="lkForget">Forget saved passphrase</button></div>
       <p class="hint" style="margin:8px 2px">Your Pages site is public even from a private repo.
         This encrypts the parcel into the file so only the passphrase opens it. Upload the locked
         copy and keep the unlocked one off the server.</p>
@@ -354,7 +355,7 @@
       style="width:100%;background:#171C24;color:#E8EDF4;border:1px solid #2A3240;border-radius:8px;
       padding:14px;font-size:16px;min-height:50px">
     <label class="ckrow" style="margin:12px 2px;color:#78859A">
-      <input type="checkbox" id="lkSave" checked> Remember on this device</label>
+      <input type="checkbox" id="lkSave"> Remember on this device — also encrypts sync</label>
     <button id="lkGo" style="width:100%;background:#FF8A3D;border:0;color:#1a0e04;border-radius:9px;
       padding:15px;font-size:15px;font-weight:700;min-height:54px;cursor:pointer">Unlock</button>
     <p id="lkErr" style="margin:12px 2px 0;font-size:13px;color:#FF5C5C;min-height:18px"></p>
