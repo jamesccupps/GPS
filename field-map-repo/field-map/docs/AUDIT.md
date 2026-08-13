@@ -208,3 +208,32 @@ shim delegated to the WebView's own geolocation when the Capacitor bridge was no
 yet up — and that has no permission plumbing on Android, so the watcher was
 created and never fired. A build-time `__FIELDMAP_NATIVE__` marker now
 distinguishes "APK without a bridge yet" from "ordinary browser".
+
+## Second Android pass, found on the device
+
+Both of these survived the first device fix and looked like the same bug
+reported again, which is why they are worth writing down separately.
+
+**Every tap on the tray was cancelled by the tray's own drag handler.** The tab
+buttons sit inside `#head`, and `#head` began a sheet drag on `touchstart`. The
+first `touchmove` — a finger always produces one — then called
+`preventDefault()`, and cancelling `touchmove` suppresses the click the tabs are
+wired to. The grip still lit up from `#head:active` and the map still panned,
+because the map is outside `#head`, so the tray looked alive and took nothing.
+It passed on the desk every single time: a mouse never sends `touchmove`. The
+fix is a 6 px threshold before the drag claims the gesture.
+
+**`onPos` was throwing on every fix while the counter climbed.** The status line
+read `fixes 8` beside three dashes. `native.js` increments before invoking the
+app's callback, which pinned the fault inside `onPos`: `L.circle()` throws
+`Circle radius cannot be NaN` one line before `paintPos()` writes anything.
+Worse than the crash, a NaN accuracy also reaches `avg.push()`'s
+inverse-variance weight, so an averaged mark would come out quietly NaN — so the
+fix refuses the position rather than inventing an accuracy the receiver never
+reported. The check is `typeof`-based because `isFinite(null)` is true.
+
+The exception was invisible because it unwound into the plugin's callback, which
+swallows it. `native.js` now catches and displays it. **The general lesson: a
+callback boundary owned by someone else's plugin is a place exceptions go to
+die, and a liveness counter on one side of that boundary proves nothing about
+the other side.**

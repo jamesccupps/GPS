@@ -35,7 +35,7 @@ two levels up. Both `cd` into this directory via `defaults.run.working-directory
 
 | Path | |
 |---|---|
-| `src/app.js` | the app — 1,971 lines, section-banner numbered |
+| `src/app.js` | the app — 1,997 lines, section-banner numbered |
 | `src/index.html` | DOM shell + build tokens |
 | `src/app.css` | all styling |
 | `src/loader.js` | unlock gate + AES payload decryption |
