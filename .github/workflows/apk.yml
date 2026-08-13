@@ -1,0 +1,75 @@
+name: Build Android APK
+
+# The APK is built here rather than locally because Java NIO cannot create a
+# Selector on the dev machine: sun.nio.ch.PipeImpl's self-connection fails with
+# "SocketException: Invalid argument: connect" out of UnixDomainSockets.connect0,
+# so every Gradle build dies with "Unable to establish loopback connection"
+# before it compiles anything. That is an OS/security-layer problem on that
+# machine, not a project problem, and a clean runner sidesteps it entirely.
+#
+# Ships the UNLOCKED build on purpose: the lock exists because a Pages site is
+# public, and a sideloaded APK on your own phone is not. See native/README.md.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'field-map-repo/field-map/native/**'
+      - 'field-map-repo/field-map/src/**'
+      - 'field-map-repo/field-map/data/**'
+      - '.github/workflows/apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: field-map-repo/field-map/native
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'          # Capacitor 7 requires >=20; 8 would need 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'          # Gradle 8.11 does not support JDK 24+
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the Capacitor toolchain
+        run: npm ci
+
+      - name: Assemble www/ from the web build
+        run: python3 scripts/assemble.py --build
+
+      - name: Sync the native project
+        run: npx cap sync android
+
+      - name: Build the debug APK
+        run: ./gradlew assembleDebug --no-daemon
+        working-directory: field-map-repo/field-map/native/android
+
+      - name: Report what was built
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          ls -l "$APK"
+          echo "size: $(( $(stat -c%s "$APK") / 1024 )) KB"
+          unzip -l "$APK" | grep -E "assets/public/(index.html|native.js)|classes.dex" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: field-map-debug-apk
+          path: field-map-repo/field-map/native/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
