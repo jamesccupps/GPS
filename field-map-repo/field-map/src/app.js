@@ -553,17 +553,36 @@ const trk={on:false,pts:[],line:null,t0:0,dist:0,moving:0,_wr:0,
   },
   forget(){ this._wr=0; idbDel('tracks',TRK_KEY).catch(()=>{}); },
   start(){ if(this.line) map.removeLayer(this.line);   /* else each restart strands one on the canvas */
-    this.on=true;this.pts=[];this.dist=0;this.moving=0;this.t0=Date.now();
+    this.on=true;this.pts=[];this.dist=0;this.moving=0;this.t0=Date.now();this._warned=false;
     this.line=L.polyline([],{renderer:canvasR,color:'#B08CFF',weight:3*zScale(),opacity:.9}).addTo(map);
     this.line._bW=3;
     $('trkBox').style.display='block'; $('bTrk').textContent='Stop track';
     $('bTrk').classList.add('rec'); holdWake(true); toast('Recording track'); },
   push(p){
+    /* 3 ft is far below the phone's noise floor under canopy. Standing still at
+       40-60 ft accuracy with 1 Hz fixes wandering 5-15 ft, every sample cleared
+       the old gate: distance climbed about 8 ft/s and dt=1 counted all of it as
+       moving, so twenty minutes of standing still added ~1,900 ft at a plausible
+       1.1 mph for a walk that never happened. */
+    if(p.acc && p.acc*FT>65){
+      if(!this._warned){ this._warned=true; toast('Skipping fixes — accuracy is poor here'); }
+      return;
+    }
     const last=this.pts[this.pts.length-1];
-    if(last){ const d=gridVec(last.lat,last.lon,p.lat,p.lon).dist; if(d<3) return;
-      this.dist+=d;
+    if(last){ const d=gridVec(last.lat,last.lon,p.lat,p.lon).dist;
+      if(d<Math.max(3, (p.acc||0)*FT*0.5)) return;
       const dt=(p.t-last.t)/1000;
-      if(dt>0&&dt<30) this.moving+=dt;   /* only contiguous motion counts as moving time */ }
+      /* After a ten-minute call the first fix back is hundreds of feet away. The
+         old code excluded the TIME but still added the distance, drawing a
+         straight line through the swamp you walked around. */
+      if(dt>30 || d/Math.max(dt,1)>15){
+        this.pts.push({lat:p.lat,lon:p.lon,t:p.t,gap:true});
+        this.line.setLatLngs(this.pts.map(q=>[q.lat,q.lon]));
+        this.persist(false);
+        return;
+      }
+      this.dist+=d;
+      if(dt>0) this.moving+=dt;   /* only contiguous motion counts as moving time */ }
     this.pts.push({lat:p.lat,lon:p.lon,t:p.t});
     this.line.setLatLngs(this.pts.map(q=>[q.lat,q.lon]));
     $('kDist').textContent=this.dist.toFixed(0)+' ft ('+(this.dist/5280).toFixed(2)+' mi)';
@@ -762,7 +781,8 @@ $('shFile').onchange=async e=>{
     if(!full) continue;
     const pid='p'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
     const hd=magHeading!=null?((magHeading+declination())%360+360)%360:null;
-    await idbPut('photos',pid,{mark:shId,full,thumb,t:Date.now(),heading:hd});
+    try{ await idbPut('photos',pid,{mark:shId,full,thumb,t:Date.now(),heading:hd}); }
+    catch(err){ toast('Photo could not be saved — storage may be full'); continue; }
     /* Appended to the textarea, not to the live mark. It used to mutate mm.note
        directly, and then Save assigned m.note from a textarea populated before
        the photo was taken -- so saving wiped the heading note and cancelling
@@ -1279,7 +1299,13 @@ $('cSave').onclick=async()=>{
   }
   if(jobs.length>3000) return toast('Zoom in — that area is too large ('+jobs.length+' tiles)');
   toast('Caching '+jobs.length+' tiles…');
+  /* Serial fetches for up to 3,000 tiles run for minutes; Android's screen
+     timeout is 30-120 s, and a frozen page stalls the job. holdWake is shared
+     with avg and trk, so release only when neither still needs it -- AUDIT.md
+     records dropping a lock a live track needed. */
+  holdWake(true);
   let done=0, failed=0;
+  try{
   for(const j of jobs){
     const key=(curBase.getCacheId?curBase.getCacheId():curBase.options.cacheId)+'/'+j.z+'/'+j.x+'/'+j.y;
     try{
@@ -1292,6 +1318,7 @@ $('cSave').onclick=async()=>{
     done++;
     if(done%10===0){ $('cBar').style.width=(done/jobs.length*100)+'%'; await new Promise(r=>setTimeout(r,0)); }
   }
+  } finally { if(!avg.on&&!trk.on) holdWake(false); }
   $('cBar').style.width='100%'; cacheStats();
   toast('Cached '+(done-failed)+' tiles'+(failed?' ('+failed+' failed)':''));
   setTimeout(()=>{$('cBar').style.width='0';},1500);
