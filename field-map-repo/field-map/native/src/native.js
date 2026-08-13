@@ -30,10 +30,39 @@
   var orig = navigator.geolocation;          // may be undefined; guarded below
   var fixCount = 0, lastFixAt = 0, lastGeoErr = '', lastAppErr = '';   // surfaced by the status line
 
+  /* This file runs from <head>, before app.js exists, so it is the only thing in
+     the APK positioned to see app.js fail. An exception at app.js's top level
+     stops the file dead -- silently, since the page keeps running whatever it
+     had already wired -- and the damage shows up later as unrelated-looking
+     symptoms: a tray that takes clicks and does nothing, a `let` stuck in its
+     temporal dead zone forever. Keep the FIRST one; the rest are consequences. */
+  addEventListener('error', function (e) {
+    if (!lastAppErr) {
+      lastAppErr = 'uncaught: ' + ((e && e.message) || '?')
+                 + (e && e.lineno ? ' @line ' + e.lineno : '');
+    }
+  });
+  addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    if (!lastAppErr) lastAppErr = 'unhandled: ' + ((r && r.message) || r || '?');
+  });
+
+  /* Capacitor.Plugins is a proxy: both property access and the method call can
+     throw before the bridge has registered anything. Every lookup goes through
+     here so no caller has to remember that -- see start() for what it cost. */
+  function pluginNamed(name) {
+    try {
+      var c = window.Capacitor;
+      return (c && c.Plugins && c.Plugins[name]) || null;
+    } catch (e) { return null; }
+  }
+
   function plugin() {
-    var cap = window.Capacitor;
-    if (!cap || !cap.isNativePlatform || !cap.isNativePlatform()) return null;
-    return (cap.Plugins && cap.Plugins.BackgroundGeolocation) || null;
+    try {
+      var cap = window.Capacitor;
+      if (!cap || !cap.isNativePlatform || !cap.isNativePlatform()) return null;
+      return (cap.Plugins && cap.Plugins.BackgroundGeolocation) || null;
+    } catch (e) { return null; }   // Plugins is a proxy; property access can throw
   }
 
   /* The plugin reports bearing/time; the W3C shape app.js reads is
@@ -77,22 +106,38 @@
       opts.backgroundMessage = 'Recording your track.';
     }
     entry.background = background;
-    BG.addWatcher(opts, function (location, error) {
-      if (error) { if (entry.error) entry.error(toError(error)); return; }
-      if (location && entry.success) entry.success(toPosition(location));
-    }).then(function (id) {
-      if (entry.dead) BG.removeWatcher({ id: id });   // cleared before the promise resolved
-      else entry.id = id;
-    }).catch(function (e) {
-      if (entry.error) entry.error(toError(e));
-    });
+    /* Nothing in here may throw into the caller. app.js calls watchPosition once,
+       at the top level, while the body is still parsing -- so an exception
+       escaping this function does not fail the GPS, it aborts the rest of app.js.
+       That is exactly what happened on the first handset: Capacitor returns a
+       proxy for a plugin the bridge has not registered yet and calling it throws
+       synchronously, so the tab wiring, the tray drag handlers and the `avg`
+       declaration were all never reached. The tray took clicks and did nothing,
+       and every fix afterwards reported "Cannot access 'avg' before
+       initialization" from a file that had stopped loading two thirds of the way
+       down. Returning false instead leaves the watcher pending, which is a state
+       adoptFallbacks() already knows how to recover from. */
+    try {
+      BG.addWatcher(opts, function (location, error) {
+        if (error) { if (entry.error) entry.error(toError(error)); return; }
+        if (location && entry.success) entry.success(toPosition(location));
+      }).then(function (id) {
+        if (entry.dead) BG.removeWatcher({ id: id });   // cleared before the promise resolved
+        else entry.id = id;
+      }).catch(function (e) {
+        if (entry.error) entry.error(toError(e));
+      });
+    } catch (e) {
+      lastGeoErr = 'addWatcher threw: ' + ((e && e.message) || e);
+      return false;
+    }
     return true;
   }
 
   function stop(entry) {
     var BG = plugin();
     entry.dead = true;
-    if (entry.id && BG) { BG.removeWatcher({ id: entry.id }); }
+    try { if (entry.id && BG) BG.removeWatcher({ id: entry.id }); } catch (e) {}
     entry.id = null;
   }
 
@@ -226,8 +271,8 @@
      and still does not know this file exists. Readouts are injected into the Go
      tab at runtime, so the web build is unchanged by any of it.
      ══════════════════════════════════════════════════════════════════════ */
-  var FS = function () { var c = window.Capacitor; return (c && c.Plugins && c.Plugins.FieldSensors) || null; };
-  var PREFS = function () { var c = window.Capacitor; return (c && c.Plugins && c.Plugins.Preferences) || null; };
+  var FS = function () { return pluginNamed('FieldSensors'); };
+  var PREFS = function () { return pluginNamed('Preferences'); };
   var FT_PER_M = 3.280839895;
 
   /* ── partial wake lock ──────────────────────────────────────────────────
@@ -278,6 +323,7 @@
   })();
   function restoreFromPrefs() {
     var pr = PREFS(); if (!pr) return Promise.resolve(0);
+    try {
     return pr.keys().then(function (res) {
       var keys = (res && res.keys) || [], n = 0, chain = Promise.resolve();
       keys.filter(function (k) { return MIRROR.test(k); }).forEach(function (k) {
@@ -290,6 +336,7 @@
       });
       return chain.then(function () { return n; });
     }).catch(function () { return 0; });
+    } catch (e) { return Promise.resolve(0); }
   }
 
   /* ── injected readouts ────────────────────────────────────────────────── */
@@ -338,6 +385,10 @@
 
   function paintSensors() {
     var p = FS(); if (!p) return;
+    try { paintSensorsInner(p); } catch (e) {}   // a bridge call can throw as well as reject
+  }
+
+  function paintSensorsInner(p) {
     p.gnss().then(function (g) {
       var s = document.getElementById('nvSats'), c = document.getElementById('nvCn0');
       if (!s || !c) return;
@@ -371,12 +422,20 @@
   function startNative() {
     injectDiag();                             // APK only; tells us what is actually wrong
     watchTray();                              // APK only; counts what the tray receives
+    /* adoptFallbacks() is what starts the watcher when the plugin was not ready
+       at body-parse time, so it is the one step here that must survive anything
+       the others do. Its own chain is isolated for that reason, and the rest is
+       wrapped so a throwing bridge costs a sensor readout, not the GPS. */
     if (window.__FIELDMAP_NATIVE__) {
       ensurePermission().then(function (st) {
         if (st !== 'granted') lastGeoErr = 'location ' + st;
         adoptFallbacks();                     // permission may unblock the watcher
-      });
+      }).catch(function () { try { adoptFallbacks(); } catch (e) {} });
     }
+    try { startPanel(); } catch (e) { lastGeoErr = lastGeoErr || 'native init: ' + ((e && e.message) || e); }
+  }
+
+  function startPanel() {
     if (!FS() && !PREFS()) return;            // browser: nothing further to add
     injectPanel();
     restoreFromPrefs().then(function (n) {
@@ -431,7 +490,7 @@
   function diagText() {
     var cap = window.Capacitor;
     var bridge = cap ? (cap.isNativePlatform && cap.isNativePlatform() ? 'native' : 'web') : 'none';
-    var bg = (cap && cap.Plugins && cap.Plugins.BackgroundGeolocation) ? 'yes' : 'NO';
+    var bg = pluginNamed('BackgroundGeolocation') ? 'yes' : 'NO';
     var fs = FS() ? 'yes' : 'no';
     var age = lastFixAt ? Math.round((Date.now() - lastFixAt) / 1000) + 's' : 'never';
     if (diagMode === 0) {
@@ -484,14 +543,16 @@
   function ensurePermission() {
     var BG = plugin();
     if (!BG || !BG.checkPermissions) return Promise.resolve('unknown');
-    return BG.checkPermissions().then(function (p) {
+    try {
+      return BG.checkPermissions().then(function (p) {
       var st = (p && (p.location || p.display)) || 'unknown';
       if (st === 'granted') return st;
       if (!BG.requestPermissions) return st;
       return BG.requestPermissions().then(function (r) {
         return (r && (r.location || r.display)) || 'denied';
       });
-    }).catch(function () { return 'unknown'; });
+      }).catch(function () { return 'unknown'; });
+    } catch (e) { return Promise.resolve('unknown'); }
   }
 
   if (document.readyState === 'loading') addEventListener('DOMContentLoaded', startNative);

@@ -237,3 +237,34 @@ swallows it. `native.js` now catches and displays it. **The general lesson: a
 callback boundary owned by someone else's plugin is a place exceptions go to
 die, and a liveness counter on one side of that boundary proves nothing about
 the other side.**
+
+## The one that mattered: a plugin proxy that throws
+
+Found only because the status line reported `app threw: Cannot access 'avg'
+before initialization` from the handset. A `let` is in its temporal dead zone
+*permanently* only if its declaration never executed, which located the fault
+without a debugger: app.js had stopped running partway down.
+
+Capacitor hands back a proxy for a plugin the bridge has not registered yet. The
+object is truthy and `typeof x.addWatcher` is `"function"`; calling it throws
+synchronously. app.js calls `watchPosition` once, at the top level, while the
+body is still parsing -- so the exception did not fail the GPS, it **aborted the
+remaining two thirds of app.js**. The tab wiring and the tray drag handlers were
+never reached, `avg` never initialised, and `adoptFallbacks()` later started the
+watcher anyway, feeding fixes into an `onPos` whose file had stopped loading.
+
+Three symptoms, one cause, and each one sent the previous session somewhere
+useless: a tray taking clicks and doing nothing, dashes above a climbing fix
+counter, and a drag that would not drag.
+
+It cannot reproduce in a browser. With no `window.Capacitor`, `plugin()` returns
+null and `start()` returns false before touching anything -- every desk test
+passed while the handset was dead. `native/scripts/bridge_harness.py` supplies
+the missing condition: a bridge that is present and hostile, harsher than
+reality, where every method of every plugin throws. Under it, app.js now runs to
+completion and the tray works.
+
+**The rule this leaves behind: nothing in native.js may throw into app.js.** The
+shim is called during body parse, so an exception escaping it is not a failed
+feature, it is a truncated program. Every bridge lookup goes through
+`pluginNamed()` and every call site is wrapped.
