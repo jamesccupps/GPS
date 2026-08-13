@@ -2,14 +2,16 @@
 <!--
   Android 15 (API 35) makes edge-to-edge mandatory for apps that target it: the
   window is laid out behind the system bars, so a WebView at bottom:0 puts its
-  bottom ~48dp under the navigation/gesture strip, where the system consumes the
-  touches. This app's whole control surface -- the drag grip, the five tabs and
-  the buttons under them -- lives in that strip, which made the tray look present
-  and completely dead on a Pixel running Android 16.
+  lower ~48dp under the navigation and gesture strip, where the system consumes
+  the touches before the WebView sees them. This app's whole control surface (the
+  drag grip, the five tabs, and the buttons under them) lives in that strip,
+  which is why the tray looked present and was completely dead on a Pixel running
+  Android 16.
 
   Opting out is honoured for targetSdk 35 and ignored from 36, so this is a
-  deliberate stopgap: the CSS now also pads for env(safe-area-inset-bottom), and
-  when the target moves to 36 the insets carry it on their own.
+  deliberate stopgap. app.css also pads #panel by env(safe-area-inset-bottom),
+  and measurePeek() already adds that inset to the peek height, so when the
+  target moves to 36 the insets carry it on their own.
 -->
 <resources>
     <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">

@@ -56,6 +56,25 @@ jobs:
       - name: Sync the native project
         run: npx cap sync android
 
+      # AAPT's failure for a malformed resource is "exit code 1" with the detail
+      # only in the log, which needs a sign-in to read. An unescaped "--" inside
+      # an XML comment cost a full build round-trip once; this catches that class
+      # in a second, before Gradle starts.
+      - name: Check the Android resources are well-formed XML
+        run: |
+          python3 - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          from pathlib import Path
+          bad = 0
+          for f in sorted(Path('android/app/src/main').rglob('*.xml')):
+              try:
+                  ET.parse(f)
+              except Exception as e:
+                  print(f'INVALID {f}: {e}'); bad += 1
+          print(f'{bad} invalid')
+          sys.exit(1 if bad else 0)
+          PY
+
       - name: Build the debug APK
         run: ./gradlew assembleDebug --no-daemon
         working-directory: field-map-repo/field-map/native/android
