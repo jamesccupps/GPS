@@ -605,18 +605,18 @@ function renderList(){
     :'No marks yet.<br>Use <b>Mark here</b> for your position, or <b>Tap to mark</b> to place one by eye.'}</div>`; return; }
   L1.innerHTML=vis.map(m=>{
     const sp=toSP(m.lat,m.lon);
-    return `<div class="item${navT&&navT.id===m.id?' tgt':''}" data-id="${m.id}">
-      ${m.photos&&m.photos.length?`<img class="th" data-ph="${m.photos[0]}" alt="">`:''}
+    return `<div class="item${navT&&navT.id===m.id?' tgt':''}" data-id="${esc(m.id)}">
+      ${m.photos&&m.photos.length?`<img class="th" data-ph="${esc(m.photos[0])}" alt="">`:''}
       <div class="bd">
         <div class="top"><div class="nm"><span class="dot" style="background:${CATS[m.cat]||CATS.Other}"></span>${esc(m.name)}</div>
-          <div class="nav" data-nav="${m.id}">—</div></div>
+          <div class="nav" data-nav="${esc(m.id)}">—</div></div>
         <div class="sub">${m.lat.toFixed(7)}, ${m.lon.toFixed(7)}</div>
         <div class="sub">E ${sp[0].toFixed(2)} N ${sp[1].toFixed(2)}${m.n>1?'  ·  avg '+m.n+' ±'+(m.rms||0).toFixed(1)+' ft':''}</div>
         ${m.note?`<div class="nt">${esc(m.note)}</div>`:''}
         <div class="acts">
-          <button class="btn sm" data-act="go" data-id="${m.id}">Show</button>
-          <button class="btn sm" data-act="nav" data-id="${m.id}">Navigate</button>
-          <button class="btn sm" data-act="ed" data-id="${m.id}">Edit</button>
+          <button class="btn sm" data-act="go" data-id="${esc(m.id)}">Show</button>
+          <button class="btn sm" data-act="nav" data-id="${esc(m.id)}">Navigate</button>
+          <button class="btn sm" data-act="ed" data-id="${esc(m.id)}">Edit</button>
         </div></div></div>`;
   }).join('');
   liveURLs.forEach(u=>URL.revokeObjectURL(u)); liveURLs.length=0;
@@ -1004,7 +1004,24 @@ async function syPut(payload, sha){
 }
 /* last write wins per mark id; a delete only wins if it is newer than the
    mark's own last edit, so editing on one phone beats an older delete */
+/* Import range-checks coordinates and strips markup; sync did none of it, and a
+   remote store is no more trustworthy than a file — same GitHub repo, edited by
+   hand, restored from a stale backup, or written by an older build. A NaN
+   coordinate corrupts the Leaflet layer and a mark with no id silently collides
+   with every other id-less mark in the merge Map. */
+function syClean(x){
+  if(!x || typeof x!=='object') return null;
+  const lat=Number(x.lat), lon=Number(x.lon);
+  if(!isFinite(lat)||!isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return null;
+  const id=typeof x.id==='string'&&x.id?x.id.replace(/[^\w:.-]/g,'').slice(0,64):'';
+  if(!id) return null;
+  return {...x, id, lat, lon, name:clean(x.name)||'Unnamed', note:clean(x.note),
+          cat:CATS[x.cat]?x.cat:'Other',
+          updated:Number(x.updated)||Number(x.t)||0, t:Number(x.t)||Date.now()};
+}
 function syMerge(lm,lg,rm,rg){
+  rm=(rm||[]).map(syClean).filter(Boolean);
+  rg=(rg||[]).filter(t=>t&&typeof t.id==='string'&&isFinite(Number(t.updated)));
   const g=new Map();
   [...(lg||[]),...(rg||[])].forEach(t=>{ const c=g.get(t.id); if(!c||t.updated>c.updated) g.set(t.id,t); });
   const m=new Map();
@@ -1085,10 +1102,15 @@ $('xCsv').onclick=()=>{
   marks.forEach(m=>{const sp=toSP(m.lat,m.lon);
     r.push([m.name,m.cat,m.note,m.lat.toFixed(7),m.lon.toFixed(7),sp[0].toFixed(2),sp[1].toFixed(2),
       m.acc?(m.acc*FT).toFixed(1):'',m.n,m.rms?m.rms.toFixed(2):'',(m.photos||[]).length,new Date(m.t).toISOString()]);});
-  dl('field-marks.csv',r.map(x=>x.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n'),'text/csv'); markExported();
+  /* Excel and Sheets evaluate a cell beginning = + - @ as a formula, quoted or
+     not. A monument note is user text and lands in a spreadsheet by design. */
+  const csvCell=c=>{ let v=String(c); if(v && '=+@-'.indexOf(v.charAt(0))>=0) v="'"+v; return '"'+v.replace(/"/g,'""')+'"'; };
+  dl('field-marks.csv',r.map(x=>x.map(csvCell).join(',')).join('\n'),'text/csv'); markExported();
 };
 $('xKml').onclick=()=>{
-  let k=marks.map(m=>`<Placemark><name>${esc(m.name)}</name><description><![CDATA[${m.cat}${m.note?' — '+m.note:''}]]></description>`
+  /* ]]> is the one sequence CDATA cannot carry, and esc() does not apply inside it */
+  const cd=t=>String(t==null?'':t).split(']]>').join(']]&gt;');
+  let k=marks.map(m=>`<Placemark><name>${esc(m.name)}</name><description><![CDATA[${cd(m.cat)}${m.note?' — '+cd(m.note):''}]]></description>`
     +`<Point><coordinates>${m.lon},${m.lat},0</coordinates></Point></Placemark>`).join('\n');
   if(trk.pts.length>1) k+=`\n<Placemark><name>Recorded track</name><LineString><tessellate>1</tessellate>`
     +`<coordinates>${trk.pts.map(p=>p.lon+','+p.lat+',0').join(' ')}</coordinates></LineString></Placemark>`;
