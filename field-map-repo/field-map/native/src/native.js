@@ -90,6 +90,7 @@
              PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 };
   }
 
+  var permState = '';     // '', granted, denied, prompt, unknown -- see failed()
   var watchers = {};      // our id -> entry
   /* offset so our ids cannot be mistaken for the platform's, which are also
      small integers -- a delegated watch and a native one could otherwise
@@ -155,7 +156,17 @@
         try { success(pos); }
         catch (e) { lastAppErr = 'app threw: ' + ((e && e.message) || e); }
       };
-      var failed  = function (e) { lastGeoErr = 'error ' + (e && e.code); if (error) error(e); };
+      /* The plugin reports a permission error the instant addWatcher runs, which
+         is during body parse -- long before the Activity has shown a dialog. Passed
+         straight through, that popped "LOCATION PERMISSION DENIED" over the map on
+         first launch, before the user had been asked anything. Hold code 1 until
+         ensurePermission() has actually come back refused; deliverDenial() then
+         releases it, so a real refusal still reaches the banner. */
+      var failed  = function (e) {
+        lastGeoErr = 'error ' + (e && e.code);
+        if (IN_APK && e && e.code === 1 && permState !== 'denied') return;
+        if (error) error(e);
+      };
       var entry = { dead: false, id: null, success: counted, error: failed, background: false };
       var key = nextId++;
       watchers[key] = entry;
@@ -428,8 +439,10 @@
        wrapped so a throwing bridge costs a sensor readout, not the GPS. */
     if (window.__FIELDMAP_NATIVE__) {
       ensurePermission().then(function (st) {
+        permState = st;
         if (st !== 'granted') lastGeoErr = 'location ' + st;
         adoptFallbacks();                     // permission may unblock the watcher
+        if (st === 'denied') deliverDenial(); // now it is real, so say so
       }).catch(function () { try { adoptFallbacks(); } catch (e) {} });
     }
     try { startPanel(); } catch (e) { lastGeoErr = lastGeoErr || 'native init: ' + ((e && e.message) || e); }
@@ -558,6 +571,18 @@
      parse, which is far too early for a permission dialog. Ask again once the
      document is ready and report what came back, so "no fix" can be told apart
      from "never asked" and from "denied". */
+  /* Held code-1 errors are dropped rather than queued, so once a refusal is
+     confirmed the watchers have to be told once, explicitly. */
+  function deliverDenial() {
+    Object.keys(watchers).forEach(function (k) {
+      var entry = watchers[k];
+      if (entry && !entry.dead && entry.error) {
+        entry.error({ code: 1, message: 'location permission denied',
+                      PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+      }
+    });
+  }
+
   function ensurePermission() {
     var BG = plugin();
     if (!BG || !BG.checkPermissions) return Promise.resolve('unknown');

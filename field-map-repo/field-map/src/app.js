@@ -507,6 +507,9 @@ function diagnose(denied){
     b='Plain <code>http://</code> is not a secure context, so GPS is blocked without prompting.'; }
   else if(framed&&denied){ t='Preview frame is blocking GPS';
     b='This is running in a sandboxed frame that does not pass the geolocation permission through.'; }
+  else if(denied&&window.__FIELDMAP_NATIVE__){ t='Location permission denied';
+    b='Open Android <b>Settings → Apps → Field Map → Permissions → Location</b>, '
+      +'allow it and choose <b>Precise</b>. Android stops asking after two refusals.'; }
   else if(denied){ t='Location permission denied';
     b='Allow location for this site and turn on <b>Use precise location</b> in Chrome\u2019s site settings, then reload.'; }
   else b='No position reported. Try reloading outdoors with a clear view of the sky.';
