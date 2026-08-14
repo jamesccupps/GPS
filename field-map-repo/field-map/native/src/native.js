@@ -592,7 +592,7 @@
     var n = parseFloat(v);
     return isFinite(n) ? Math.round(n) : 0;
   }
-  function paintDiag() { if (diagEl) { diagEl.textContent = diagText(); fitDiag(); } }
+  function paintDiag() { if (diagEl) diagEl.textContent = diagText(); }
   /* --topH is what app.css positions every top-anchored overlay from: the
      compass, the target bar, the fit bar and the permission banner. The status
      line was laid over the top of all of them, which put it through the compass
@@ -629,6 +629,17 @@
     });
     document.body.appendChild(diagEl);
     paintDiag();
+    fitDiag();
+    /* The text changes every second (fix age), the height almost never does, so
+       re-measuring on each paint bought one forced layout per second for nothing.
+       A ResizeObserver fires only when the box actually changes -- which is the
+       wrap to a second line -- and costs nothing in between. */
+    if (window.ResizeObserver) {
+      try { new ResizeObserver(fitDiag).observe(diagEl); }
+      catch (e) { setInterval(fitDiag, 2000); }
+    } else {
+      setInterval(fitDiag, 2000);
+    }
     setInterval(paintDiag, 1000);
   }
 
