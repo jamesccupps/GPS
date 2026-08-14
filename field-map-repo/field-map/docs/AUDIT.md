@@ -268,3 +268,39 @@ completion and the tray works.
 shim is called during body parse, so an exception escaping it is not a failed
 feature, it is a truncated program. Every bridge lookup goes through
 `pluginNamed()` and every call site is wrapped.
+
+## Second Android review, after the app first worked in the field
+
+**Every export did nothing.** A WebView ignores `<a download>` unless the host
+installs a `DownloadListener`, and Capacitor installs none -- there is no
+`setDownloadListener` anywhere in its Android source. GeoJSON, CSV, KML, the
+recorded track and the photo zip each built a blob URL, clicked an anchor, and
+produced no file and no error. `markExported()` then recorded a successful
+backup, so the Map tab said the marks were safe. This was the export the user is
+told to run before the uninstall an unsigned build forces on them, which made it
+the only path whose failure could actually lose data. Now written natively
+through MediaStore, with `dl()` resolving true only when the bytes are on disk.
+
+**The foreground service had no notification.** The geolocation plugin declares
+`POST_NOTIFICATIONS` and never requests it; from Android 13 the declaration
+grants nothing. Tracking continued with the screen off with nothing on screen
+saying so. Requested when a track starts.
+
+**The status line covered the compass.** It was positioned over the same band
+`--topH` reserves for the compass, target bar, fit bar and permission banner.
+Growing that variable moves all of them.
+
+**"OUT 125531 ft".** True, and 23.8 miles. Feet below a mile, miles above it.
+
+**"LOCATION PERMISSION DENIED" on first launch, before Android asked.** The
+plugin reports a permission error the instant `addWatcher` runs, during body
+parse. Held until `ensurePermission()` is actually refused -- and the copy told
+the user to open Chrome's site settings, in an APK, which has none.
+
+Checked and found sound, so recorded here to stop the next session re-checking:
+all six basemaps -- Esri imagery and topo, both USGS layers, OSM, and the Maine
+statewide LiDAR hillshade `exportImage` -- answer a cross-origin `fetch` with
+usable CORS headers, so offline tile caching genuinely works in the APK.
+Capacitor's `BridgeWebChromeClient` implements `onShowFileChooser`, so the photo
+capture input works. The plugin manifest supplies `FOREGROUND_SERVICE_LOCATION`
+and `foregroundServiceType="location"`, which targetSdk 35 requires.

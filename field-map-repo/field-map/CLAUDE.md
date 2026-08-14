@@ -177,6 +177,14 @@ round-tripping under 0.001 ft, staking the recorded Course 8 call from the
 Course 7 corner landing within 0.03 ft of the recorded corner, and a soak of
 ~1,200 synthetic fixes watching per-fix cost and heap growth.
 
+`native/scripts/bridge_harness.py` builds the one condition a browser cannot
+supply: a Capacitor bridge that is present and throws on every call. Run it after
+any change to `native.js`. The assertions that matter are that the tab wiring at
+the end of `app.js` was reached, that `avg`/`PEEK`/`buzz`/`SY` are not in a
+temporal dead zone, and that the status line carries no `uncaught:` — a truncated
+`app.js` is the failure mode this wrapper produces, and it looks like anything
+but a crash.
+
 Two things the browser cannot show you, so do not read them as bugs:
 `requestAnimationFrame` does not fire in a non-compositing pane, so the vector
 canvas reads as blank until you force `canvasR._redraw()`; and `map.setZoom()`
@@ -235,6 +243,11 @@ make the output differ by platform.
 - **Photos and tiles are not mirrored** to app-private storage in the APK — only
   the small `fm_` keys are. They are IndexedDB blobs and would be tens of
   megabytes across the bridge on every save.
+- **A WebView has no downloads.** `<a download>` is inert unless the host sets a
+  `DownloadListener`, and Capacitor sets none, so every export was silent. In the
+  APK `native.js` replaces `window.dl` and `FieldSensors.saveDownload` writes
+  through MediaStore. Anything new that produces a file must go through `dl()`,
+  not build its own anchor — that is exactly how the photo zip got missed.
 
 ---
 
