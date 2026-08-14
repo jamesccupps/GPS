@@ -213,7 +213,23 @@
      If that element ever goes missing the fallback is to stay in background
      permanently: noisy, but it never silently loses the track the APK exists
      to record. */
+  /* The geolocation plugin declares POST_NOTIFICATIONS and never requests it, and
+     from Android 13 a manifest declaration grants nothing -- so the foreground
+     service ran with no notification: no sign the track was recording with the
+     screen off, and no way to stop it without reopening the app. Asked at the
+     moment a track starts, so the prompt arrives attached to the thing it is for,
+     and never awaited: a refused notification must not stop the recording. */
+  var askedNotify = false;
+  function ensureNotifications() {
+    if (askedNotify) return;
+    askedNotify = true;
+    var fs = FS();
+    if (!fs || !fs.notificationPermission) return;
+    try { fs.notificationPermission().catch(function () {}); } catch (e) {}
+  }
+
   function rebind(background) {
+    if (background) ensureNotifications();
     Object.keys(watchers).forEach(function (key) {
       var entry = watchers[key];
       if (entry.dead || entry.background === background) return;

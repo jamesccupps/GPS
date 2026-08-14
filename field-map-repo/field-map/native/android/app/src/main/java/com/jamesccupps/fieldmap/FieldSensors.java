@@ -20,10 +20,13 @@ import android.os.PowerManager;
 import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
 /**
  * The sensors a browser cannot reach.
@@ -53,7 +56,12 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * not exist reads as absent instead of throwing, and the same code runs on a
  * phone that has none of them.
  */
-@CapacitorPlugin(name = "FieldSensors")
+@CapacitorPlugin(
+    name = "FieldSensors",
+    permissions = {
+        @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = "notifications")
+    }
+)
 public class FieldSensors extends Plugin implements SensorEventListener {
 
     private SensorManager sensors;
@@ -271,6 +279,45 @@ public class FieldSensors extends Plugin implements SensorEventListener {
         } catch (Exception e) {
             call.reject("write failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * Ask for POST_NOTIFICATIONS, which gates the foreground-service notification.
+     *
+     * The background-geolocation plugin declares this permission in its manifest
+     * but never requests it, and from Android 13 a declaration grants nothing. So
+     * the track kept recording with the screen off -- the entire reason this APK
+     * exists -- with no notification to say it was running and no way to stop it
+     * without reopening the app.
+     *
+     * Requested when a track actually starts rather than at launch, so the prompt
+     * arrives attached to the thing it is for.
+     */
+    @PluginMethod
+    public void notificationPermission(PluginCall call) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            JSObject r = new JSObject();
+            r.put("granted", true);     // implicitly granted before 13
+            r.put("asked", false);
+            call.resolve(r);
+            return;
+        }
+        if (getPermissionState("notifications") == PermissionState.GRANTED) {
+            JSObject r = new JSObject();
+            r.put("granted", true);
+            r.put("asked", false);
+            call.resolve(r);
+            return;
+        }
+        requestPermissionForAlias("notifications", call, "notificationResult");
+    }
+
+    @PermissionCallback
+    private void notificationResult(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("granted", getPermissionState("notifications") == PermissionState.GRANTED);
+        r.put("asked", true);
+        call.resolve(r);
     }
 
     @Override
