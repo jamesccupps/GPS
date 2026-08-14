@@ -602,7 +602,120 @@ function paintPos(){
   $('pSP').textContent='E '+sp[0].toFixed(2)+'  N '+sp[1].toFixed(2);
   $('pAlt').textContent=(me.alt!=null?((me.alt-GEOID_N)*FT).toFixed(0)+' ft':'—')+'  /  '
     +(me.spd>0?(me.spd*2.23694).toFixed(1)+' mph':'still');
+  paintGround();
 }
+/* ── Ground elevation from LiDAR ────────────────────────────────────────
+   GPS altitude is the worst number this app shows. Vertical is the weakest axis
+   in any GNSS fix, and the sky that makes it weakest -- half of it behind trees
+   -- is the sky you have on this parcel. Fifty feet of error is ordinary.
+
+   Maine's bare-earth LiDAR is a different instrument: sub-foot vertical, canopy
+   already stripped. So the ground under your reported position is a far better
+   answer than the height your phone reports, and the difference between the two
+   is a live read on how badly the fix is doing.
+
+   The honest caveat, and it is on screen: this is the DEM at your REPORTED
+   horizontal position, so horizontal error becomes vertical error through the
+   local slope. On a 10% grade, 16 ft of horizontal error is 1.6 ft of height.
+   Still an order of magnitude better than the alternative.
+
+   Sampled to a grid and cached with the tiles, because the entire point is to
+   have it where there is no signal. 20 ft spacing is deliberately coarser than
+   the horizontal error feeding it -- a finer grid would be false precision. */
+const ELEV_KEY='elev/grid';
+const ELEV_URL='https://gis.maine.gov/image/rest/services/DEM/Maine_Elevation_DEM_Statewide/ImageServer/getSamples';
+const ELEV_MAX=1000;
+let elevGrid=null;
+
+function mercM(lat,lon){ const R=6378137;
+  return [lon*Math.PI/180*R, R*Math.log(Math.tan(Math.PI/4+lat*Math.PI/360))]; }
+
+async function elevSamples(points){
+  /* The service caps a request at 1000 samples and does not say so: ask for
+     2500 and 1000 come back, no error, no warning, and a grid quietly built
+     from a quarter of the ground it claims to cover. Batch, and check counts. */
+  const out=new Array(points.length).fill(null);
+  for(let i=0;i<points.length;i+=ELEV_MAX){
+    const chunk=points.slice(i,i+ELEV_MAX);
+    const r=await fetch(ELEV_URL,{method:'POST',mode:'cors',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams({geometry:JSON.stringify({points:chunk,spatialReference:{wkid:3857}}),
+        geometryType:'esriGeometryMultipoint',returnFirstValueOnly:'true',f:'json'})});
+    if(!r.ok) throw new Error('elevation service '+r.status);
+    const j=await r.json();
+    const sm=j.samples||[];
+    if(sm.length!==chunk.length) throw new Error('asked '+chunk.length+', got '+sm.length);
+    /* locationId is the index within the request; trusting order would be a
+       guess, and this costs nothing. */
+    sm.forEach(x=>{ const k=i+(+x.locationId); out[k]=Number(x.value); });
+  }
+  return out;
+}
+
+async function elevBuild(bounds, stepFt){
+  const sw=mercM(bounds.getSouth(),bounds.getWest()), ne=mercM(bounds.getNorth(),bounds.getEast());
+  const stepM=(stepFt||20)*0.3048;
+  let cols=Math.max(2,Math.ceil((ne[0]-sw[0])/stepM)+1);
+  let rows=Math.max(2,Math.ceil((ne[1]-sw[1])/stepM)+1);
+  /* Five thousand points is five round trips and 20 KB of grid. Past that the
+     wait costs more than the resolution is worth on ground this gentle. */
+  while(cols*rows>5000){ cols=Math.max(2,Math.ceil(cols/1.3)); rows=Math.max(2,Math.ceil(rows/1.3)); }
+  const dx=(ne[0]-sw[0])/(cols-1), dy=(ne[1]-sw[1])/(rows-1);
+  const pts=[];
+  for(let j=0;j<rows;j++) for(let i=0;i<cols;i++) pts.push([sw[0]+i*dx, sw[1]+j*dy]);
+  const vals=await elevSamples(pts);
+  const data=new Float32Array(vals.length);
+  vals.forEach((v,i)=>{ data[i]=(v==null||!isFinite(v))?NaN:v; });
+  return {x0:sw[0],y0:sw[1],dx,dy,cols,rows,data,t:stamp()};
+}
+
+/* Bilinear, in metres NAVD88. null outside the cached grid, or where the DEM
+   itself has no data -- water and the edges of the state both do. */
+function elevAt(lat,lon){
+  const g=elevGrid; if(!g) return null;
+  const p=mercM(lat,lon);
+  const fx=(p[0]-g.x0)/g.dx, fy=(p[1]-g.y0)/g.dy;
+  if(!(fx>=0&&fy>=0&&fx<=g.cols-1&&fy<=g.rows-1)) return null;
+  const i=Math.min(Math.floor(fx),g.cols-2), j=Math.min(Math.floor(fy),g.rows-2);
+  const tx=fx-i, ty=fy-j, at=(a,b)=>g.data[b*g.cols+a];
+  const z=at(i,j)*(1-tx)*(1-ty)+at(i+1,j)*tx*(1-ty)
+         +at(i,j+1)*(1-tx)*ty+at(i+1,j+1)*tx*ty;
+  return isFinite(z)?z:null;
+}
+
+/* With signal and no grid yet, one point query is worth making -- throttled,
+   and keyed to about a 36 ft cell, which is finer than the fix that drives it. */
+let liveElev={key:'',z:null,at:0};
+function elevLive(lat,lon){
+  const k=lat.toFixed(4)+','+lon.toFixed(4);
+  if(liveElev.key===k) return liveElev.z;
+  if(Date.now()-liveElev.at>15000){
+    liveElev.at=Date.now();
+    const p=mercM(lat,lon);
+    fetch(ELEV_URL+'?geometry='+encodeURIComponent(JSON.stringify({x:p[0],y:p[1],spatialReference:{wkid:3857}}))
+      +'&geometryType=esriGeometryPoint&returnFirstValueOnly=true&f=json',{mode:'cors'})
+      .then(r=>r.json())
+      .then(j=>{ const v=j&&j.samples&&j.samples[0];
+                 if(v&&isFinite(+v.value)){ liveElev={key:k,z:+v.value,at:Date.now()}; paintGround(); } })
+      .catch(()=>{});
+  }
+  return null;
+}
+
+function paintGround(){
+  if(!me) return;
+  const cached=elevAt(me.lat,me.lon);
+  const z=(cached!=null)?cached:elevLive(me.lat,me.lon);
+  if(z==null){ $('pGnd').textContent=elevGrid?'outside the cached ground':'—'; return; }
+  let s=(z*FT).toFixed(1)+' ft';
+  if(me.alt!=null){
+    const d=((me.alt-GEOID_N)-z)*FT;
+    s+='  ·  GPS reads '+(d>=0?'+':'')+d.toFixed(0)+' ft';
+  }
+  if(cached==null) s+='  ·  live';
+  $('pGnd').textContent=s;
+}
+
 /* inside/outside + nearest line + nearest corner: the question you
    actually have standing in the woods */
 let nearCorner=null;
@@ -1844,7 +1957,16 @@ $('cSave').onclick=async()=>{
     if(done%10===0){ $('cBar').style.width=(done/jobs.length*100)+'%'; await new Promise(r=>setTimeout(r,0)); }
   }
   } finally { if(!avg.on&&!trk.on) holdWake(false); }
-  $('cBar').style.width='100%'; cacheStats();
+  $('cBar').style.width='100%';
+  /* Same trip, same reason: an elevation grid you can only read with signal is
+     an elevation grid for the driveway. */
+  try{
+    toast('Sampling the ground…');
+    const g=await elevBuild(b, 20);
+    elevGrid=g; await idbPut('tiles',ELEV_KEY,g);
+    toast('Ground sampled: '+g.cols+'×'+g.rows+' points');
+  }catch(e){ toast('Ground sampling failed — tiles are still cached'); }
+  cacheStats();
   toast('Cached '+(done-failed)+' tiles'+(failed?' ('+failed+' failed)':''));
   setTimeout(()=>{$('cBar').style.width='0';},1500);
 };
@@ -2281,6 +2403,7 @@ openDB().then(async()=>{
   /* Caches written before the getTileUrl zoom fix hold real imagery of the wrong
      place under every key deeper than the zoom it was cached at. There is no way
      to tell a poisoned tile from a good one, so drop the store once. */
+  try{ elevGrid=(await idbGet('tiles',ELEV_KEY))||null; }catch(e){}
   if(store.get('fm_tilez')!=='2'){
     try{ await idbClear('tiles'); }catch(e){}
     store.set('fm_tilez','2');
