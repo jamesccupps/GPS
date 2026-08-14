@@ -513,13 +513,31 @@
     var n = parseFloat(v);
     return isFinite(n) ? Math.round(n) : 0;
   }
-  function paintDiag() { if (diagEl) diagEl.textContent = diagText(); }
+  function paintDiag() { if (diagEl) { diagEl.textContent = diagText(); fitDiag(); } }
+  /* --topH is what app.css positions every top-anchored overlay from: the
+     compass, the target bar, the fit bar and the permission banner. The status
+     line was laid over the top of all of them, which put it through the compass
+     rose. Growing --topH by its measured height moves the whole set down
+     together, and restoring it on dismiss puts them back -- much better than
+     nudging four selectors and hoping a fifth never appears. Re-measured on
+     every paint because the text wraps to two lines at some widths. */
+  var baseTopH = 0;
+  function fitDiag() {
+    var root = document.documentElement;
+    if (!diagEl) { if (baseTopH) root.style.setProperty('--topH', baseTopH + 'px'); return; }
+    var h = Math.round(diagEl.getBoundingClientRect().height);
+    if (h) root.style.setProperty('--topH', (baseTopH + h) + 'px');
+  }
+
   function injectDiag() {
     if (!IN_APK || diagEl || !document.body) return;
+    // read before the first override, or we would measure our own adjustment
+    baseTopH = parseFloat(getComputedStyle(document.documentElement)
+                            .getPropertyValue('--topH')) || 62;
     diagEl = document.createElement('div');
     diagEl.id = 'nvDiag';
     diagEl.style.cssText = 'position:absolute;left:0;right:0;z-index:1000;'
-      + 'top:calc(env(safe-area-inset-top,0px) + 54px);'
+      + 'top:calc(env(safe-area-inset-top,0px) + ' + baseTopH + 'px);'
       + 'background:rgba(14,17,22,.92);color:#78859A;font:12px/1.5 ui-monospace,monospace;'
       + 'padding:4px 10px;text-align:center;border-bottom:1px solid #2A3240';
     var press = 0;
@@ -527,7 +545,7 @@
     diagEl.addEventListener('click', function () {
       /* press stays 0 until a touch sets it, and 0 makes every click look like a
          56-year long-press -- so any click arriving without one hid the line. */
-      if (press && Date.now() - press > 600) { diagEl.remove(); diagEl = null; return; }
+      if (press && Date.now() - press > 600) { diagEl.remove(); diagEl = null; fitDiag(); return; }
       diagMode = (diagMode + 1) % 3; paintDiag();
     });
     document.body.appendChild(diagEl);
