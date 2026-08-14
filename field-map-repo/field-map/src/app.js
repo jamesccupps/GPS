@@ -528,21 +528,28 @@ function paintPos(){
 /* inside/outside + nearest line + nearest corner: the question you
    actually have standing in the woods */
 let nearCorner=null;
+/* Feet are the right unit for everything on the parcel, and wrong the moment you
+   are not on it: standing in Portland the boundary readout said "OUT 125531 ft".
+   A function declaration, not a const, because this is reachable from onPos and
+   a TDZ here has already cost this project one silent failure. */
+function fmtRange(ft){
+  return Math.abs(ft)<5280 ? ft.toFixed(0)+' ft' : (ft/5280).toFixed(1)+' mi';
+}
 function paintRel(){
   if(!me||!parcelSP){ return; }
   const p=toSP(me.lat,me.lon);
   const inside=pointInRing(p,parcelSP), d=distToRing(p,parcelSP);
-  $('sBnd').textContent=(inside?'IN ':'OUT ')+d.toFixed(0)+' ft';
+  $('sBnd').textContent=(inside?'IN ':'OUT ')+fmtRange(d);
   $('sBnd').style.color=inside?'var(--good)':'var(--warn)';
   $('rIn').textContent=inside?'Inside the conveyed parcel':'Outside the conveyed parcel';
-  $('rLine').textContent=d.toFixed(1)+' ft';
+  $('rLine').textContent=d<5280?d.toFixed(1)+' ft':fmtRange(d);
   let best=null;
   PARCEL.features.filter(f=>f.geometry.type==='Point').forEach(f=>{
     const ll=sh(f.geometry.coordinates), v=gridVec(me.lat,me.lon,ll[0],ll[1]);
     if(!best||v.dist<best.d) best={d:v.dist,az:v.az,nm:f.properties.name,lat:ll[0],lon:ll[1]};
   });
   nearCorner=best;
-  $('rCor').textContent=best?`${best.nm} — ${best.d.toFixed(0)} ft ${quad(best.az)}`:'—';
+  $('rCor').textContent=best?`${best.nm} — ${fmtRange(best.d)} ${quad(best.az)}`:'—';
 }
 if(!navigator.geolocation){ $('sFix').textContent='Unsupported'; diagnose(false); }
 else if(location.protocol==='file:'||(location.protocol==='http:'&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1')){
