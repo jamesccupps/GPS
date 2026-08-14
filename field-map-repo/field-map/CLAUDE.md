@@ -59,9 +59,9 @@ the app caches tiles far past the resolution the source holds. Re-run the bbox
 check before adding a year.
 
 `src/app.js` sections, in order: projection, geometry, storage, tiles, map,
-parcel, sun/grid/magnetic, GPS, wake lock, averaging, track, marks, edit sheet,
-navigate-to, walk-a-line, **stake and measure**, fit, sync, export, tile cache,
-layers/orientation/UI.
+parcel, sun/grid/magnetic, GPS, wake lock, averaging, **re-occupation**, track,
+marks, edit sheet, navigate-to, walk-a-line, **stake, measure and trilaterate**,
+fit, sync, export, tile cache, layers/orientation/UI.
 
 ---
 
@@ -179,6 +179,15 @@ cd dist && python3 -m http.server 8777        # localhost is a secure context
 Geolocation needs HTTPS or `localhost`. A `file://` load gets no permission
 prompt at all — the app detects this and explains it rather than showing dashes.
 
+The three newest features have their own truth tests, all cheap to repeat:
+trilateration against the plan's own corners (three exact distances recover a
+known point to 0.0000 ft; one tape wrong by 3 ft gives RMS 1.38 ft and moves the
+answer 6.45 ft; two tapes give two answers 742 ft apart and the mirror must be
+offered, not silently chosen); re-occupation arithmetic (two 3 m occupations
+combine to 3/√2 = 2.121 m at the exact midpoint, three to 3/√3 = 1.732 m); and
+contour intervals (`ContourInterval` is metres — N × 1.524 puts lines on exact
+5 ft multiples, and a bare "5" would give 16.4 ft lines).
+
 Things worth asserting after any change: `toSP` against the nine plan corners
 (0.0098 ft mean, 0.0225 ft max), `gridVec`/`quad` against the deed line table
 (0.030 ft max), MGRS against `19T DJ 02895 72763` at 44.0016/-70.2112,
@@ -290,15 +299,16 @@ blocked on James, and the exact commands.
    every change without a reinstall. Download must happen in Java: GitHub release
    assets send no CORS headers, so a WebView `fetch` dies at the first redirect.
    Rollback is `setServerAssetPath({path:'public'})`, not `setServerBasePath`.
-3. **Re-occupation** — averaging the same monument on a second visit currently
-   creates an unrelated second mark instead of comparing against the first.
-4. **External GNSS** (SparkFun RTK Postcard over USB serial) for sub-metre. Needs
+3. **External GNSS** (SparkFun RTK Postcard over USB serial) for sub-metre. Needs
    the native wrapper, which now exists, and hardware that does not.
-5. **Trilateration helper** — tape distances from control points, least-squares
-   adjusted, for features under canopy where GNSS will not converge. Pairs with a
-   Bluetooth laser rangefinder.
-6. **LiDAR-derived contours** baked as an overlay, from Maine's statewide DEM.
-7. **Photo sync** via the add-on — a storage-size decision, not a technical one.
+4. **Photo sync** via the add-on — a storage-size decision, not a technical one.
+5. **Terrain profile along a line.** `getSamples` on the DEM ImageServer returns
+   real elevations — 85.977 m at 1 m resolution over this parcel — so a section
+   along a deed course or between two marks is a handful of point queries, not a
+   heightmap download. Far more use in the field than a 3D render, which needs a
+   renderer this app deliberately does not carry.
+
+Done since this list was written: re-occupation, LiDAR contours, trilateration.
 
 Do not add a JS framework or a bundler. The single-file, no-build-step property
 is what makes this survivable in the field.
