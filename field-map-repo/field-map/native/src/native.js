@@ -119,15 +119,30 @@
        down. Returning false instead leaves the watcher pending, which is a state
        adoptFallbacks() already knows how to recover from. */
     try {
-      BG.addWatcher(opts, function (location, error) {
+      /* Capacitor.Plugins.X is the raw bridge proxy, not the plugin's registered
+         wrapper, and for a method taking a callback the proxy returns the
+         callback id synchronously as a string -- the Promise<string> in the
+         plugin's own typings describes the wrapper. An emulator on API 36
+         reported "BG.addWatcher(...).then is not a function" while fixes kept
+         arriving, because the callback registers either way and only the id was
+         lost. Losing it is not cosmetic: removeWatcher() then cannot stop the
+         watcher, so rebind() leaks the old one instead of replacing it when a
+         track starts, and start() returning false left the entry pendingNative,
+         so adoptFallbacks() went on to open a second watcher beside the first. */
+      var adopt = function (id) {
+        if (id == null) return;
+        if (entry.dead) { try { BG.removeWatcher({ id: id }); } catch (e) {} }
+        else entry.id = id;
+      };
+      var handle = BG.addWatcher(opts, function (location, error) {
         if (error) { if (entry.error) entry.error(toError(error)); return; }
         if (location && entry.success) entry.success(toPosition(location));
-      }).then(function (id) {
-        if (entry.dead) BG.removeWatcher({ id: id });   // cleared before the promise resolved
-        else entry.id = id;
-      }).catch(function (e) {
-        if (entry.error) entry.error(toError(e));
       });
+      if (handle && typeof handle.then === 'function') {
+        handle.then(adopt).catch(function (e) { if (entry.error) entry.error(toError(e)); });
+      } else {
+        adopt(handle);
+      }
     } catch (e) {
       lastGeoErr = 'addWatcher threw: ' + ((e && e.message) || e);
       return false;
@@ -580,6 +595,7 @@
     if (diagMode === 1) {
       return 'bridge ' + bridge + ' · geo plugin ' + bg + ' · sensors ' + fs
            + ' · fixes ' + fixCount + ' · inset ' + insetBottom() + 'px'
+           + ' · watch ' + watchState()
            + ' · build ' + (window.__FIELDMAP_BUILD__ || '?');
     }
     /* down/move/up/cancel/click, then what was under the finger */
@@ -587,6 +603,15 @@
          + ' · cancel ' + tray.c + ' · CLICK ' + tray.k
          + (tray.hit ? ' · ' + tray.hit : '');
   }
+  /* live/total native watchers whose id we actually hold. "1/1" is healthy;
+     "0/1" means one is running that nothing can ever stop. */
+  function watchState() {
+    var ks = Object.keys(watchers), live = 0, held = 0;
+    ks.forEach(function (k) { var e = watchers[k];
+      if (e.dead) return; live++; if (e.id != null) held++; });
+    return held + '/' + live;
+  }
+
   function insetBottom() {
     var v = getComputedStyle(document.documentElement).getPropertyValue('--sab').trim();
     var n = parseFloat(v);
