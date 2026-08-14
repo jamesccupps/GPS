@@ -213,8 +213,20 @@ Builds, then `scripts/lock.py` encrypts the parcel into `_site/index.html` using
 the `FIELDMAP_PASSPHRASE` repo secret, and publishes that plus `sw.js`, the
 manifest and the icons. The unlocked build never leaves the runner. `lock.py`
 refuses to write a file containing any `TELLTALES` string, so a leak fails the
-deploy instead of reaching the internet — that guard exists because a comment in
-`app.js` naming the road once shipped in the clear.
+deploy instead of reaching the internet, and `lock.py _site --scan` repeats the
+check across the whole publish tree.
+
+**That list is a correctness check first and a privacy one second.** Every string
+on it lives in the parcel payload, so if `encrypt_parcel()` ever silently no-ops
+or the `/*PARCEL_*/` markers stop matching, they reappear in the output and the
+deploy fails rather than publishing the deed. That is why the deed book and the
+abutter stay on it even though the recorded plan is a public document.
+
+**The road and the town were on it and were removed, deliberately** — do not put
+them back as an oversight. The repository is public and names both, in this
+file's first line and in the README, so blocking them in the deployed HTML bought
+nothing, while costing the three sharpest historical basemaps, whose Maine
+GeoLibrary service paths are named after the town.
 
 **`.github/workflows/apk.yml`** → https://github.com/jamesccupps/GPS/releases/latest/download/field-map.apk
 Builds the APK on a runner and publishes it to a rolling `apk-latest` release, so

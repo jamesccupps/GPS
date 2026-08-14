@@ -68,8 +68,13 @@ so `lock.py _site --scan` walks the entire publish tree, sidecars included, and
 the deploy runs it after assembling `_site`. That list originally held the deed book,
 the abutter and the corner names but **not the road or the town** — so a comment
 in `app.js` reading `GEOID18 at Hobart Road` shipped in the clear inside a
-"locked" file, and nothing caught it. Both are on the list now, and the scan
-below is the belt to that braces:
+"locked" file, and nothing caught it. The scan below is the belt to that braces.
+
+The road and town were added then, and have since been removed again by decision:
+the repository is public and names both, so the guard was blocking the three
+sharpest historical basemaps — municipal ortho flights whose service paths carry
+the town name — to withhold something the source beside it already stated. What
+remains on the list is there to prove the encryption ran at all:
 
 ```bash
 grep -nE "(4[34]\.[0-9]{3,}|-7[01]\.[0-9]{3,})" _site/index.html

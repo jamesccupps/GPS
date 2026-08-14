@@ -36,12 +36,21 @@ BEGIN = "/*PARCEL_BEGIN*/"
 END = "/*PARCEL_END*/"
 
 # If any of these survive into the locked file, the lock did not do its job.
-# Deed references and abutter names come from the recorded plan, not the map.
-# The road and town are the whole point of a lock that hides a parcel, and they
-# were not on this list: a comment in app.js naming the road shipped in the clear
-# inside a "locked" file and nothing caught it.
+#
+# This list does two jobs, and only one of them is about privacy. The other is
+# proof the encryption actually ran: these strings live in the parcel payload, so
+# if encrypt_parcel() ever silently no-ops or the markers stop matching, they
+# reappear in the output and the deploy fails instead of publishing the deed.
+# That is why the deed references stay even though the plan they come from is a
+# public record.
+#
+# The road and town were on this list and are not any more, by decision: the
+# repository is public and names both -- CLAUDE.md's first line and the README
+# say "Hobart Road in Auburn, Maine" -- so blocking them in the deployed HTML
+# bought nothing while costing the three sharpest historical basemaps, whose
+# service paths are literally named after the town.
 TELLTALES = ["POINT OF BEGINNING", "Karen S. Pease", "Bk 10912", "Maine W SP ftUS",
-             "iron pipe found", "Course 1 end", "Hobart", "Auburn"]
+             "iron pipe found", "Course 1 end"]
 
 
 def b64(raw: bytes) -> str:
