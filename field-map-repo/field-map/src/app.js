@@ -699,6 +699,69 @@ function finishAvg(){
   else toast(`Averaged ${avg.s.length} fixes — Save as mark`);
 }
 
+/* ── Re-occupation ──────────────────────────────────────────────────────
+   Averaging the same monument on a second visit used to mint an unrelated
+   second mark, which threw away the most valuable number the app can produce.
+
+   Within a single session GPS errors are correlated -- multipath off the same
+   trunks, the same ionosphere, the same satellite geometry -- so avg.rms is
+   optimistic by a factor more fixes cannot cure. Two hundred fixes agreeing to
+   0.4 ft in one sitting is not evidence of 0.4 ft. Coming back on a different
+   day and landing 2 ft away is, because almost every correlated error has
+   resampled in between.
+
+   So occupations are kept individually, the mark's position is their
+   inverse-variance weighted mean, and the spread between them is reported as
+   what it is: the real repeatability. */
+function occOf(m){
+  if(Array.isArray(m.occ) && m.occ.length) return m.occ;
+  return [{lat:m.lat,lon:m.lon,acc:m.acc,n:m.n||1,rms:m.rms??null,t:m.t}];
+}
+function combineOcc(occ){
+  let W=0, la=0, lo=0, n=0;
+  occ.forEach(o=>{ const a=(o.acc>0?o.acc:3), w=1/(a*a);
+                   W+=w; la+=o.lat*w; lo+=o.lon*w; n+=o.n||1; });
+  const lat=la/W, lon=lo/W;
+  let worst=0, sum=0;
+  occ.forEach(o=>{ const d=gridVec(lat,lon,o.lat,o.lon).dist; if(d>worst) worst=d; sum+=d*d; });
+  return {lat,lon,acc:Math.sqrt(1/W),n,
+          spread:worst, srms:Math.sqrt(sum/occ.length), visits:occ.length};
+}
+/* Generous, because it only opens a prompt -- the corners on this plan are 200 ft
+   apart at the closest, so there is no realistic way to catch the wrong one. */
+function reoLimit(accA, accB){
+  return Math.max(20, 2*(((accA>0?accA:3)+(accB>0?accB:3))*FT));
+}
+function nearestMark(lat,lon){
+  let best=null;
+  marks.forEach(m=>{ const v=gridVec(lat,lon,m.lat,m.lon);
+    if(!best||v.dist<best.d) best={m,d:v.dist,az:v.az}; });
+  return best;
+}
+let reoPending=null;
+function offerReoccupy(obs, near){
+  reoPending={obs,m:near.m};
+  const c=combineOcc(occOf(near.m));
+  $('reoWho').textContent=`${near.m.name} — ${c.visits} visit${c.visits>1?'s':''}`;
+  $('reoDelta').textContent=`${fmtFt(near.d)} ${quad(near.az)}`;
+  $('reoNew').textContent=`${obs.n} fixes, scatter ${obs.rms.toFixed(1)} ft, fix ±${fmtFt(obs.acc*FT)}`;
+  $('reoOld').textContent=`${c.n} fixes, fix ±${fmtFt(c.acc*FT)}`
+    +(c.visits>1?`, visits agree to ${fmtFt(c.spread)}`:'');
+  $('avgBox').style.display='none';
+  $('reoBox').style.display='block';
+}
+function doReoccupy(){
+  if(!reoPending) return;
+  const {obs,m}=reoPending;
+  const occ=occOf(m).concat([{lat:obs.lat,lon:obs.lon,acc:obs.acc,n:obs.n,rms:obs.rms,t:stamp()}]);
+  const c=combineOcc(occ);
+  m.occ=occ; m.lat=c.lat; m.lon=c.lon; m.acc=c.acc; m.n=c.n;
+  m.spread=+c.spread.toFixed(2); m.updated=stamp();
+  saveMarks(); drawMarks(); renderList(); reanchorNav(); paintRel();
+  $('reoBox').style.display='none'; reoPending=null;
+  toast(`${m.name}: ${c.visits} visits, agreeing to ${fmtFt(c.spread)}`);
+}
+
 /* ══════════════════════════════════════════════════════════════
    10. TRACK
    ══════════════════════════════════════════════════════════════ */
@@ -883,7 +946,7 @@ function renderList(){
         <div class="top"><div class="nm"><span class="dot" style="background:${CATS[m.cat]||CATS.Other}"></span>${esc(m.name)}</div>
           <div class="nav" data-nav="${esc(m.id)}">—</div></div>
         <div class="sub">${m.lat.toFixed(7)}, ${m.lon.toFixed(7)}</div>
-        <div class="sub">E ${sp[0].toFixed(2)} N ${sp[1].toFixed(2)}${m.n>1?'  ·  avg '+m.n+' · scatter '+(m.rms||0).toFixed(1)+' ft'+(m.acc?' · fix ±'+fmtFt(m.acc*FT):''):''}</div>
+        <div class="sub">E ${sp[0].toFixed(2)} N ${sp[1].toFixed(2)}${m.n>1?'  ·  avg '+m.n+((m.occ&&m.occ.length>1)?'':' · scatter '+(m.rms||0).toFixed(1)+' ft')+(m.acc?' · fix ±'+fmtFt(m.acc*FT):''):''}${(m.occ&&m.occ.length>1)?'  ·  '+m.occ.length+' visits, agree '+fmtFt(m.spread||0):''}</div>
         ${m.note?`<div class="nt">${esc(m.note)}</div>`:''}
         <div class="acts">
           <button class="btn sm" data-act="go" data-id="${esc(m.id)}">Show</button>
@@ -1953,7 +2016,13 @@ $('fCen').onclick=()=>{ buzz(8); me?map.setView([me.lat,me.lon],19):toast('No GP
 $('bAvg').onclick=()=>avg.start('mark');
 $('aStop').onclick=()=>{ avg.stop(); $('avgBox').style.display='none'; toast('Cancelled'); };
 $('aSave').onclick=()=>{ const m=avg.mean(); if(!m) return toast('No samples');
+  const near=nearestMark(m.lat,m.lon);
+  if(near && near.d<=reoLimit(m.acc, near.m.acc)) return offerReoccupy(m, near);
   addMark(m.lat,m.lon,{n:m.n,rms:m.rms,acc:m.acc}); $('avgBox').style.display='none'; };
+$('reoJoin').onclick=doReoccupy;
+$('reoNewMark').onclick=()=>{ if(!reoPending) return; const o=reoPending.obs; reoPending=null;
+  $('reoBox').style.display='none'; addMark(o.lat,o.lon,{n:o.n,rms:o.rms,acc:o.acc}); };
+$('reoCancel').onclick=()=>{ reoPending=null; $('reoBox').style.display='none'; };
 $('bCenter').onclick=()=>{ me?map.setView([me.lat,me.lon],19):toast('No GPS fix yet'); };
 $('fAvg').onclick=()=>avg.start('fit');
 $('fApply').onclick=applyFit;

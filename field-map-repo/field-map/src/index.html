@@ -102,6 +102,22 @@
       </div>
     </div>
 
+    <div class="dat" id="reoBox" style="display:none">
+      <h4>Already marked here</h4>
+      <dl class="dl"><dt>Nearest</dt><dd id="reoWho">&mdash;</dd></dl>
+      <dl class="dl"><dt>Recorded lies</dt><dd id="reoDelta">&mdash;</dd></dl>
+      <dl class="dl"><dt>This visit</dt><dd id="reoNew">&mdash;</dd></dl>
+      <dl class="dl"><dt>Recorded</dt><dd id="reoOld">&mdash;</dd></dl>
+      <p class="hint" style="margin:9px 2px 0">How far two visits land apart is a better error estimate
+        than the scatter within either one. A single session's errors are correlated &mdash; same trees,
+        same satellites &mdash; so its RMS always reads optimistic.</p>
+      <div class="row" style="margin:9px 0 0">
+        <button class="btn sm" id="reoJoin">Re-occupy</button>
+        <button class="btn sm" id="reoNewMark">Save as new</button>
+        <button class="btn sm" id="reoCancel">Cancel</button>
+      </div>
+    </div>
+
     <div class="dat">
       <h4>Current position</h4>
       <dl class="dl"><dt>Lat / Lon</dt><dd id="pDD">—</dd></dl>
