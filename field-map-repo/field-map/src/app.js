@@ -265,17 +265,20 @@ const MaineHS = CachedTiles.extend({
 
    nz is maxNativeZoom -- exportImage will happily render any bbox, so without a
    ceiling the app would request and cache tiles far past the resolution the
-   source actually holds. */
+   source actually holds.
+
+   The three municipal flights over this parcel are the sharpest imagery of the
+   lot and are deliberately NOT here: their service paths and credit lines carry
+   the town name, and lock.py refuses to publish any file containing it. Adding
+   them back means giving the locked build a way to carry those strings encrypted
+   rather than in the clear -- not editing TELLTALES. */
 const HIST=[
   {label:'1910',      p:'Topo/topoUsgs24k1910',                       nz:17, a:'USGS 1:24k 1910 — Maine GeoLibrary'},
   {label:'1945',      p:'Topo/topoUsgs24k1945',                       nz:17, a:'USGS 1:24k 1945 — Maine GeoLibrary'},
   {label:'1996 DOQ',  p:'Regional/orthoRegionalDoq1996_1998',         nz:17, a:'USGS DOQ 1996–98 — Maine GeoLibrary'},
-  {label:'1998 city', p:'Municipal/orthoMunicipalAuburn1998',         nz:19, a:'Auburn 1998 — Maine GeoLibrary'},
-  {label:'2006 city', p:'Municipal/orthoMunicipalLewistonAuburn2006', nz:19, a:'Lewiston–Auburn 2006 — Maine GeoLibrary'},
   {label:'2013 NAIP', p:'NAIP/orthoNaip2013',                         nz:18, a:'NAIP 2013 — Maine GeoLibrary'},
   {label:'2014 topo', p:'Topo/topoUsgs24k2014',                       nz:17, a:'USGS 1:24k 2014 — Maine GeoLibrary'},
-  {label:'2018 NAIP', p:'NAIP/orthoNaip2018',                         nz:18, a:'NAIP 2018 — Maine GeoLibrary'},
-  {label:'2018 city', p:'Municipal/orthoMunicipalLewistonAuburn2018', nz:19, a:'Lewiston–Auburn 2018 — Maine GeoLibrary'}
+  {label:'2018 NAIP', p:'NAIP/orthoNaip2018',                         nz:18, a:'NAIP 2018 — Maine GeoLibrary'}
 ];
 let histIdx=(()=>{ const i=+store.get('fm_hist'); return Number.isInteger(i)&&i>=0&&i<HIST.length?i:0; })();
 
