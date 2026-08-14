@@ -298,6 +298,33 @@ const MaineImage = CachedTiles.extend({
   getCacheId(){ return 'hist_'+HIST[histIdx].label.replace(/\s+/g,''); }
 });
 
+/* ── Contours, from the same statewide LiDAR the hillshade uses ──────────
+   ArcGIS computes them server-side, so this costs one raster-function argument
+   instead of a heightmap download and a marching-squares implementation.
+
+   ContourInterval is in the DEM's own units, which are metres. Asking for "5"
+   would give 5 m lines -- 16.4 ft apart, useless on ground this gentle. 0.3048
+   is exact, so N x 1.524 m lands the lines on exact 5 ft multiples of NAVD88
+   zero, which is what a plan would show. Measured ink coverage over this parcel:
+   2 ft 6.5%, 5 ft 2.6%, 10 ft 1.1%. */
+const ctOpt=Object.assign({ft:5,on:false},
+  (()=>{ try{ return JSON.parse(store.get('fm_ct')||'{}'); }catch(e){ return {}; } })());
+const ctSave=()=>store.set('fm_ct',JSON.stringify(ctOpt));
+const MaineContour = CachedTiles.extend({
+  getTileUrl(c){
+    const R=20037508.342789244, n=Math.pow(2,c.z);
+    const x0=c.x/n*2*R-R, x1=(c.x+1)/n*2*R-R, y0=R-(c.y+1)/n*2*R, y1=R-c.y/n*2*R;
+    const rule={rasterFunction:'Contour',
+                rasterFunctionArguments:{ContourInterval:+(ctOpt.ft*0.3048).toFixed(6)}};
+    return 'https://gis.maine.gov/image/rest/services/DEM/Maine_Elevation_DEM_Statewide/ImageServer/exportImage'
+      +`?bbox=${x0},${y0},${x1},${y1}&bboxSR=3857&imageSR=3857&size=256,256&format=png&f=image`
+      +`&renderingRule=${encodeURIComponent(JSON.stringify(rule))}`;
+  },
+  getCacheId(){ return 'ct_'+ctOpt.ft; }
+});
+const contours=new MaineContour('',{maxZoom:21,maxNativeZoom:18,opacity:.9,zIndex:350,
+  cacheId:'ct',attribution:'Contours: Maine GeoLibrary LiDAR'});
+
 /* L.TileLayer.getTileUrl() fills {z} from the LAYER's current zoom, not from the
    coords you hand it. That is fine for on-screen tiles, where the two always
    agree, and silently wrong for a pre-cache job that walks z0..z0+3 while the map
@@ -1590,16 +1617,22 @@ $('cSave').onclick=async()=>{
      z16, so standing at z18 the old range was for(z=18; z<=16) — it never ran,
      and reported "Cached 0 tiles" behind a full progress bar. */
   const b=map.getBounds();
-  const nat=curBase.options.maxNativeZoom||curBase.options.maxZoom||19;
-  const z0=Math.min(Math.max(map.getZoom(),14), nat);
-  const zmax=Math.min(z0+3, nat);
+  /* Contours come from a different service under a different cache key, so
+     caching the basemap alone left them blank in the woods -- the one place
+     they are worth having. Each layer gets its own zoom ceiling. */
+  const layers=[curBase]; if(map.hasLayer(contours)) layers.push(contours);
   const jobs=[];
-  for(let z=z0; z<=zmax; z++){
-    const n=Math.pow(2,z);
-    const x1=Math.floor((b.getWest()+180)/360*n), x2=Math.floor((b.getEast()+180)/360*n);
-    const yOf=la=>Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*n);
-    const y1=yOf(b.getNorth()), y2=yOf(b.getSouth());
-    for(let x=x1;x<=x2;x++) for(let y=y1;y<=y2;y++) jobs.push({x,y,z});
+  for(const L of layers){
+    const nat=L.options.maxNativeZoom||L.options.maxZoom||19;
+    const z0=Math.min(Math.max(map.getZoom(),14), nat);
+    const zmax=Math.min(z0+3, nat);
+    for(let z=z0; z<=zmax; z++){
+      const n=Math.pow(2,z);
+      const x1=Math.floor((b.getWest()+180)/360*n), x2=Math.floor((b.getEast()+180)/360*n);
+      const yOf=la=>Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*n);
+      const y1=yOf(b.getNorth()), y2=yOf(b.getSouth());
+      for(let x=x1;x<=x2;x++) for(let y=y1;y<=y2;y++) jobs.push({L,x,y,z});
+    }
   }
   if(jobs.length>3000) return toast('Zoom in — that area is too large ('+jobs.length+' tiles)');
   toast('Caching '+jobs.length+' tiles…');
@@ -1611,11 +1644,11 @@ $('cSave').onclick=async()=>{
   let done=0, failed=0;
   try{
   for(const j of jobs){
-    const key=(curBase.getCacheId?curBase.getCacheId():curBase.options.cacheId)+'/'+j.z+'/'+j.x+'/'+j.y;
+    const key=(j.L.getCacheId?j.L.getCacheId():j.L.options.cacheId)+'/'+j.z+'/'+j.x+'/'+j.y;
     try{
       const have=await idbGet('tiles',key);
       if(!have){
-        const r=await fetch(tileUrlAt(curBase,j),{mode:'cors'});
+        const r=await fetch(tileUrlAt(j.L,j),{mode:'cors'});
         if(r.ok) await idbPut('tiles',key,await r.blob()); else failed++;
       }
     }catch(e){ failed++; }
@@ -1642,6 +1675,29 @@ $('baseList').onclick=e=>{
   [...$('baseList').children].forEach(c=>{const on=c.dataset.b===el.dataset.b;
     c.classList.toggle('on',on); c.querySelector('.ck').textContent=on?'ON':'';});
 };
+/* Contours are an overlay, not a basemap: they sit above whatever imagery is
+   underneath, so switching the base must not disturb them. curBase.bringToBack()
+   in the basemap handler is what keeps that true. */
+function paintCt(){
+  const on=map.hasLayer(contours);
+  document.querySelectorAll('[data-ct]').forEach(b=>
+    b.classList.toggle('sel', on && +b.dataset.ct===ctOpt.ft));
+  $('ctOff').classList.toggle('sel', !on);
+}
+function setCt(ft){
+  if(map.hasLayer(contours)){
+    if(ft===ctOpt.ft){ map.removeLayer(contours); ctOpt.on=false; ctSave(); return paintCt(); }
+    map.removeLayer(contours);                    // re-add so the new interval redraws
+  }
+  ctOpt.ft=ft; ctOpt.on=true; ctSave();
+  contours.addTo(map); paintCt();
+}
+document.querySelectorAll('[data-ct]').forEach(b=>b.onclick=()=>setCt(+b.dataset.ct));
+$('ctOff').onclick=()=>{ if(map.hasLayer(contours)) map.removeLayer(contours);
+  ctOpt.on=false; ctSave(); paintCt(); };
+if(ctOpt.on) contours.addTo(map);
+paintCt();
+
 /* Year picker for the Historical basemap. Selecting a year also selects the
    layer, because wanting 1945 and not wanting to look at it is not a state worth
    supporting. The layer is removed and re-added rather than redrawn: that is what
