@@ -1,8 +1,13 @@
 package com.jamesccupps.fieldmap;
 
 import android.Manifest;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.util.Base64;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -36,6 +41,13 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  *   wake lock  - the web Wake Lock API is screen-on only, which is why averaging
  *                and tracking cost battery. PARTIAL keeps the CPU with the screen
  *                off.
+ *   save       - a WebView ignores <a download> entirely unless the host sets a
+ *                DownloadListener, and Capacitor sets none. Every export in this
+ *                app -- GeoJSON, CSV, KML, the track, the photo zip -- was a
+ *                blob URL and an anchor click, so all of them did nothing at all
+ *                in the APK: no file, no error. That is the export the user is
+ *                told to run before the uninstall that an unsigned build forces
+ *                on them, so it was the one path that had to work.
  *
  * Everything is polled by the JS side rather than pushed, so a sensor that does
  * not exist reads as absent instead of throwing, and the same code runs on a
@@ -197,6 +209,68 @@ public class FieldSensors extends Plugin implements SensorEventListener {
         JSObject r = new JSObject();
         r.put("held", wakeLock != null && wakeLock.isHeld());
         call.resolve(r);
+    }
+
+    /**
+     * Write bytes to the device's Downloads folder and return where they landed.
+     *
+     * MediaStore from API 29 up, which needs no permission and puts the file
+     * where the Files app and a USB host can both see it. Below that there is no
+     * MediaStore.Downloads collection, so it falls back to the app's own
+     * external files directory -- still no permission, still readable over USB,
+     * just a longer path.
+     */
+    @PluginMethod
+    public void saveDownload(PluginCall call) {
+        String name = call.getString("name");
+        String mime = call.getString("mime", "application/octet-stream");
+        String b64 = call.getString("data");
+        if (name == null || b64 == null) { call.reject("name and data are required"); return; }
+
+        byte[] bytes;
+        try {
+            bytes = Base64.decode(b64, Base64.DEFAULT);
+        } catch (IllegalArgumentException e) {
+            call.reject("data was not valid base64"); return;
+        }
+
+        try {
+            String where;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues v = new ContentValues();
+                v.put(MediaStore.Downloads.DISPLAY_NAME, name);
+                v.put(MediaStore.Downloads.MIME_TYPE, mime);
+                v.put(MediaStore.Downloads.IS_PENDING, 1);
+                Uri uri = getContext().getContentResolver()
+                        .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                if (uri == null) { call.reject("could not create the file"); return; }
+                try (java.io.OutputStream out =
+                             getContext().getContentResolver().openOutputStream(uri)) {
+                    if (out == null) { call.reject("could not open the file"); return; }
+                    out.write(bytes);
+                }
+                v.clear();
+                v.put(MediaStore.Downloads.IS_PENDING, 0);   // until this, nothing else can see it
+                getContext().getContentResolver().update(uri, v, null, null);
+                where = "Downloads/" + name;
+            } else {
+                java.io.File dir = getContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (dir == null) { call.reject("no external storage"); return; }
+                if (!dir.exists() && !dir.mkdirs()) { call.reject("could not create the folder"); return; }
+                java.io.File f = new java.io.File(dir, name);
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                    out.write(bytes);
+                }
+                where = f.getAbsolutePath();
+            }
+            JSObject r = new JSObject();
+            r.put("saved", true);
+            r.put("where", where);
+            r.put("bytes", bytes.length);
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject("write failed: " + e.getMessage());
+        }
     }
 
     @Override

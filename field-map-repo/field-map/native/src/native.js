@@ -448,8 +448,58 @@
     try { startPanel(); } catch (e) { lastGeoErr = lastGeoErr || 'native init: ' + ((e && e.message) || e); }
   }
 
+  /* ══════════════════════════════════════════════════════════════════════
+     EXPORTS
+
+     A WebView ignores <a download> unless the host sets a DownloadListener, and
+     Capacitor sets none anywhere in its Android source. So every export in this
+     app -- GeoJSON, CSV, KML, the recorded track and the photo zip -- built a
+     blob URL, clicked an anchor and did absolutely nothing: no file, no error,
+     no way to tell from inside the page. app.js even recorded a successful
+     backup afterwards, so the Map tab reported the marks were safe.
+
+     That is the export the user is told to run before the uninstall an unsigned
+     build forces on them, which made it the one path that had to work. Same
+     tactic as the geolocation shim: replace the browser-shaped global, leave
+     app.js alone. dl() is a top-level function declaration in a classic script,
+     so it is a property of window and reassigning it redirects every call site.
+     ══════════════════════════════════════════════════════════════════════ */
+  function toBase64(data, mime) {
+    var blob = (data instanceof Blob) ? data
+             : new Blob([data], { type: mime || 'application/octet-stream' });
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () {
+        var s = String(fr.result), i = s.indexOf(',');
+        resolve(i >= 0 ? s.slice(i + 1) : s);      // strip the data: prefix
+      };
+      fr.onerror = function () { reject(fr.error || new Error('could not read the export')); };
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  function installSave() {
+    var fs = FS();
+    if (!IN_APK || !fs || !fs.saveDownload || typeof window.dl !== 'function') return;
+    window.dl = function (name, data, mime) {
+      return toBase64(data, mime).then(function (b64) {
+        return fs.saveDownload({ name: name, mime: mime || 'application/octet-stream', data: b64 });
+      }).then(function (r) {
+        if (window.toast) window.toast('Saved to ' + ((r && r.where) || 'Downloads'));
+        return true;
+      }).catch(function (e) {
+        /* Resolve false rather than reject: app.js gates markExported() on this,
+           and a rejection would also land in the uncaught handler and crowd out
+           whatever real error was there. */
+        if (window.toast) window.toast('Save failed: ' + ((e && e.message) || e));
+        return false;
+      });
+    };
+  }
+
   function startPanel() {
     if (!FS() && !PREFS()) return;            // browser: nothing further to add
+    installSave();
     injectPanel();
     restoreFromPrefs().then(function (n) {
       if (n && window.toast) window.toast('Recovered ' + n + ' item(s) from app storage');

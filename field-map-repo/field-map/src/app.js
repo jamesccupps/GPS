@@ -1386,10 +1386,16 @@ addEventListener('offline', ()=>syPaint('offline'));
 /* ══════════════════════════════════════════════════════════════
    15. EXPORT
    ══════════════════════════════════════════════════════════════ */
-function dl(name,txt,mime){
-  const u=URL.createObjectURL(new Blob([txt],{type:mime}));
+/* Resolves true when the file is really on disk. In a browser the anchor click
+   is the whole operation, so that is immediate; in the APK native.js replaces
+   this wholesale, because a WebView ignores <a download> and every export here
+   silently did nothing at all. Takes a Blob as well as text, so the photo zip
+   goes through the same door instead of building its own anchor. */
+function dl(name,data,mime){
+  const u=URL.createObjectURL(data instanceof Blob?data:new Blob([data],{type:mime}));
   const a=document.createElement('a'); a.href=u; a.download=name; a.click();
-  setTimeout(()=>URL.revokeObjectURL(u),4000);
+  setTimeout(()=>URL.revokeObjectURL(u),8000);
+  return Promise.resolve(true);
 }
 function bundle(){
   const fs=marks.map(m=>{ const sp=toSP(m.lat,m.lon);
@@ -1407,7 +1413,7 @@ function bundle(){
         shift_ft:+Math.hypot(shift.dE,shift.dN).toFixed(2)}}); }
   return {type:'FeatureCollection',features:fs};
 }
-$('xGeo').onclick=()=>{ dl('field-data.geojson',JSON.stringify(bundle(),null,2),'application/geo+json'); markExported(); };
+$('xGeo').onclick=()=>{ dl('field-data.geojson',JSON.stringify(bundle(),null,2),'application/geo+json').then(ok=>{ if(ok) markExported(); }); };
 $('xCsv').onclick=()=>{
   const r=[['name','type','note','lat','lon','sp_east_ftus','sp_north_ftus','accuracy_ft','fixes','scatter_ft','photos','recorded']];
   marks.forEach(m=>{const sp=toSP(m.lat,m.lon);
@@ -1416,7 +1422,7 @@ $('xCsv').onclick=()=>{
   /* Excel and Sheets evaluate a cell beginning = + - @ as a formula, quoted or
      not. A monument note is user text and lands in a spreadsheet by design. */
   const csvCell=c=>{ let v=String(c); if(v && '=+@-'.indexOf(v.charAt(0))>=0) v="'"+v; return '"'+v.replace(/"/g,'""')+'"'; };
-  dl('field-marks.csv',r.map(x=>x.map(csvCell).join(',')).join('\n'),'text/csv'); markExported();
+  dl('field-marks.csv',r.map(x=>x.map(csvCell).join(',')).join('\n'),'text/csv').then(ok=>{ if(ok) markExported(); });
 };
 $('xKml').onclick=()=>{
   /* ]]> is the one sequence CDATA cannot carry, and esc() does not apply inside it */
@@ -1427,8 +1433,7 @@ $('xKml').onclick=()=>{
     +`<coordinates>${trk.pts.map(p=>p.lon+','+p.lat+',0').join(' ')}</coordinates></LineString></Placemark>`;
   dl('field-data.kml',`<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">`
     +`<Document><name>Field data</name>\n${k}\n</Document></kml>`,
-    'application/vnd.google-earth.kml+xml');
-  markExported();
+    'application/vnd.google-earth.kml+xml').then(ok=>{ if(ok) markExported(); });
 };
 /* Photos never sync, so this is the only way the photographic record of a
    monument ever leaves the phone — and it used to fire one programmatic download
@@ -1477,10 +1482,8 @@ $('xPho').onclick=async()=>{
     files.push({ name:base+'_'+used[base]+'.jpg', data:new Uint8Array(await r.full.arrayBuffer()) });
   }
   if(!files.length) return toast('No photos yet');
-  const u=URL.createObjectURL(zipStore(files));
-  const a=document.createElement('a'); a.href=u; a.download='field-photos.zip'; a.click();
-  setTimeout(()=>URL.revokeObjectURL(u),8000);
-  toast('Downloaded '+files.length+' photos');
+  dl('field-photos.zip',zipStore(files),'application/zip')
+    .then(ok=>{ if(ok) toast('Exported '+files.length+' photos'); });
 };
 $('xImp').onclick=()=>$('fImp').click();
 $('fImp').onchange=e=>{
