@@ -716,6 +716,85 @@ function paintGround(){
   $('pGnd').textContent=s;
 }
 
+/* ── Terrain profile ────────────────────────────────────────────────────
+   What the ground does between two points, which decides how you walk to a
+   corner and often where an old road or a wall crossed. One getSamples call
+   with a polyline and a sampleCount returns the whole section; offline it comes
+   off the cached grid instead, at whatever resolution that grid holds.
+
+   Drawn as inline SVG. A chart library for one polyline would be the first
+   dependency this app has ever taken, and it would buy nothing. */
+const PROF_N=90;
+async function profileZ(a, b){
+  if(elevGrid){
+    const zs=[];
+    for(let i=0;i<PROF_N;i++){
+      const f=i/(PROF_N-1);
+      const z=elevAt(a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f);
+      zs.push(z);
+    }
+    if(zs.every(z=>z!=null)) return {z:zs, src:'cached ground'};
+  }
+  const pa=mercM(a[0],a[1]), pb=mercM(b[0],b[1]);
+  const r=await fetch(ELEV_URL,{method:'POST',mode:'cors',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({geometry:JSON.stringify({paths:[[pa,pb]],spatialReference:{wkid:3857}}),
+      geometryType:'esriGeometryPolyline',sampleCount:String(PROF_N),
+      returnFirstValueOnly:'true',f:'json'})});
+  if(!r.ok) throw new Error('elevation service '+r.status);
+  const j=await r.json();
+  const sm=(j.samples||[]).map(x=>+x.value).filter(v=>isFinite(v));
+  if(sm.length<2) throw new Error('no ground data along that line');
+  return {z:sm, src:'live'};
+}
+function drawProfile(zs, runFt){
+  const W=320, H=120, PAD=26;
+  const lo=Math.min(...zs), hi=Math.max(...zs);
+  const span=Math.max(hi-lo, 0.3048);            // never divide by a flat field
+  const x=i=>PAD+(W-PAD-6)*(i/(zs.length-1));
+  const y=z=>H-18-(H-18-8)*((z-lo)/span);
+  const pts=zs.map((z,i)=>x(i).toFixed(1)+','+y(z).toFixed(1)).join(' ');
+  const rise=(zs[zs.length-1]-zs[0])*FT, drop=(hi-lo)*FT;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img">
+    <polyline points="${pts}" fill="none" stroke="var(--flag)" stroke-width="2"/>
+    <line x1="${PAD}" y1="${H-18}" x2="${W-6}" y2="${H-18}" stroke="var(--line)"/>
+    <line x1="${PAD}" y1="8" x2="${PAD}" y2="${H-18}" stroke="var(--line)"/>
+    <text x="2" y="13" font-size="9" fill="#78859A">${(hi*FT).toFixed(0)}</text>
+    <text x="2" y="${H-20}" font-size="9" fill="#78859A">${(lo*FT).toFixed(0)}</text>
+    <text x="${PAD+2}" y="${H-6}" font-size="9" fill="#78859A">0</text>
+    <text x="${W-6}" y="${H-6}" font-size="9" fill="#78859A" text-anchor="end">${runFt.toFixed(0)} ft</text>
+  </svg>
+  <div class="hint" style="margin:6px 2px 0">Relief ${fmtFt(drop)} over ${fmtFt(runFt)} ·
+    net ${(rise>=0?'+':'')+rise.toFixed(1)} ft · steepest ${steepest(zs,runFt).toFixed(0)}%</div>`;
+}
+/* Slope has to be quoted over a stated baseline or it is not a slope. Sampling
+   90 points along 133 ft puts them 1.5 ft apart on a 1 m DEM, so a per-sample
+   gradient measures the DEM's own noise: the same line read 66% live and 4% off
+   the 20 ft grid. A fixed 25 ft window gives an answer that means the same thing
+   whichever source drew it, and 25 ft is about what a person feels as a grade. */
+const SLOPE_BASE_FT=25;
+function steepest(zs, runFt){
+  const seg=runFt/(zs.length-1);
+  const w=Math.max(1, Math.round(SLOPE_BASE_FT/seg));
+  if(w>=zs.length) return Math.abs((zs[zs.length-1]-zs[0])*FT)/runFt*100;
+  let m=0;
+  for(let i=0;i+w<zs.length;i++) m=Math.max(m, Math.abs((zs[i+w]-zs[i])*FT)/(w*seg));
+  return m*100;
+}
+async function runProfile(){
+  const a=resolvePoint($('prA').value), b=resolvePoint($('prB').value);
+  if(!a||!b) return toast('Pick two points that have a position');
+  const run=gridVec(a[0],a[1],b[0],b[1]).dist;
+  if(run<1) return toast('Those are the same point');
+  $('prOut').innerHTML='<div class="hint">Sampling…</div>';
+  try{
+    const {z,src}=await profileZ(a,b);
+    $('prOut').innerHTML=drawProfile(z,run)
+      +`<div class="hint" style="margin:2px 2px 0">Source: ${src}</div>`;
+  }catch(e){ $('prOut').innerHTML='<div class="hint">'+esc(e.message)
+      +'. Cache this view on wifi and it works without signal.</div>'; }
+}
+
 /* inside/outside + nearest line + nearest corner: the question you
    actually have standing in the woods */
 let nearCorner=null;
@@ -1380,6 +1459,11 @@ function fillPointSelects(){
   /* Control points are things you can stand on, so "My position" is not one. */
   const ctrlHtml=opts(pointList(false));
   $('tA').innerHTML=ctrlHtml; $('tB').innerHTML=ctrlHtml; $('tC').innerHTML=ctrlHtml;
+  const pa=$('prA').value, pb=$('prB').value;
+  $('prA').innerHTML=html; $('prB').innerHTML=html;
+  if(pa) $('prA').value=pa;
+  if(pb) $('prB').value=pb;
+  if(!$('prB').value && $('prB').options.length>1) $('prB').selectedIndex=1;
   if(a) $('pjFrom').value=a;
   if(b) $('pjA').value=b;
   if(c) $('pjB').value=c;
@@ -1390,6 +1474,7 @@ function fillPointSelects(){
   if(!$('tB').value && $('tB').options.length>1) $('tB').selectedIndex=1;
   if(!$('tC').value && $('tC').options.length>2) $('tC').selectedIndex=2;
 }
+$('prGo').onclick=runProfile;
 $('triGo').onclick=runTri;
 $('triFlip').onclick=()=>{ if(triSol&&triSol.other) showTri(triSol.other,triSol.self,triSol.ctrl); };
 $('triSave').onclick=()=>{ if(!triSol) return;

@@ -192,6 +192,16 @@
       <dl class="dl"><dt>Result</dt><dd id="pjOut">—</dd></dl>
     </div>
     <div class="dat">
+      <h4>Ground profile</h4>
+      <p class="hint" style="margin:0 0 9px">What the ground does between two points &mdash; which decides
+        how you walk to a corner, and often shows where an old road or a wall crossed. Off the same LiDAR
+        as the contours, so it works from the cached ground with no signal.</p>
+      <div class="row"><select id="prA"></select><select id="prB"></select></div>
+      <div class="row"><button class="btn sm" id="prGo">Draw profile</button></div>
+      <div id="prOut"></div>
+    </div>
+
+    <div class="dat">
       <h4>Trilaterate</h4>
       <p class="hint" style="margin:0 0 9px">For a point under canopy where GNSS will not converge. Tape
         to it from two or three things you can stand on, and solve. Distances are <b>horizontal</b> feet
