@@ -17,6 +17,11 @@ Runs in a phone browser with no signal, or as a sideloaded Android app.
 - **Measure between** any two of your position, a plan corner, or a mark
 - Fit the parcel to a found monument — one shift moves everything
 - Coordinates in decimal degrees, DMS, Maine West State Plane ftUS, UTM, MGRS
+- **LiDAR contours** at true foot intervals, and **ground elevation** from the
+  bare-earth DEM — sub-foot vertical where GPS altitude is routinely 50 ft out,
+  with a **ground profile** between any two points
+- **Trilaterate** a corner GNSS cannot see, from taped distances, with residuals
+- **Re-occupy** a monument on a later visit: two visits are the honest error bar
 - Offline tile caching, track recording, photos, daylight remaining
 - Syncs through a Home Assistant add-on or the GitHub Contents API
 

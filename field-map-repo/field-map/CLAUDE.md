@@ -59,7 +59,8 @@ the app caches tiles far past the resolution the source holds. Re-run the bbox
 check before adding a year.
 
 `src/app.js` sections, in order: projection, geometry, storage, tiles, map,
-parcel, sun/grid/magnetic, GPS, wake lock, averaging, **re-occupation**, track,
+parcel, sun/grid/magnetic, GPS, **ground elevation and profile**, wake lock,
+averaging, **re-occupation**, track,
 marks, edit sheet, navigate-to, walk-a-line, **stake, measure and trilaterate**,
 fit, sync, export, tile cache, layers/orientation/UI.
 
@@ -188,6 +189,13 @@ combine to 3/√2 = 2.121 m at the exact midpoint, three to 3/√3 = 1.732 m); a
 contour intervals (`ContourInterval` is metres — N × 1.524 puts lines on exact
 5 ft multiples, and a bare "5" would give 16.4 ft lines).
 
+Elevation has two traps worth re-checking. Bilinear reads off the cached grid
+must land within a foot of a fresh point query (measured 0.27 ft and 0.04 ft),
+and **any slope figure must be quoted over a stated baseline**: computed
+per-sample, the same profile read 66% from live 1.5 ft spacing and 4% from the
+20 ft grid, because at that spacing it was measuring DEM noise. Over the fixed
+25 ft baseline the two agree to a few points.
+
 Things worth asserting after any change: `toSP` against the nine plan corners
 (0.0098 ft mean, 0.0225 ft max), `gridVec`/`quad` against the deed line table
 (0.030 ft max), MGRS against `19T DJ 02895 72763` at 44.0016/-70.2112,
@@ -272,6 +280,15 @@ make the output differ by platform.
 - **Tile cache has no eviction.** "Clear cache" is manual, and the nine
   historical years each cache separately (`getCacheId()` carries the year), so
   caching several of them multiplies the storage.
+- **One elevation grid, replaced not merged.** "Cache this view" samples the
+  ground over the current bounds and overwrites the previous grid, so caching a
+  second area loses the first. Outside it the readout says so rather than
+  interpolating off the edge. The grid rides in the `tiles` store under
+  `elev/grid`, so "Clear cache" takes it too — which is correct.
+- **`getSamples` caps a request at 1000 and does not say so.** Ask for 2500 and
+  1000 come back with no error. `elevSamples()` batches and checks the returned
+  count against what it asked for; it also places values by `locationId` rather
+  than trusting reply order. Any new use of that endpoint must do the same.
 - **90 days offline** can resurrect deleted marks (tombstone expiry).
 - **Photos and tiles are not mirrored** to app-private storage in the APK — only
   the small `fm_` keys are. They are IndexedDB blobs and would be tens of
@@ -302,13 +319,18 @@ blocked on James, and the exact commands.
 3. **External GNSS** (SparkFun RTK Postcard over USB serial) for sub-metre. Needs
    the native wrapper, which now exists, and hardware that does not.
 4. **Photo sync** via the add-on — a storage-size decision, not a technical one.
-5. **Terrain profile along a line.** `getSamples` on the DEM ImageServer returns
-   real elevations — 85.977 m at 1 m resolution over this parcel — so a section
-   along a deed course or between two marks is a handful of point queries, not a
-   heightmap download. Far more use in the field than a 3D render, which needs a
-   renderer this app deliberately does not carry.
+5. **Elevation on marks.** The grid is already cached; stamping a monument's
+   ground height into its record and its export is a few lines.
 
-Done since this list was written: re-occupation, LiDAR contours, trilateration.
+Done since this list was written: re-occupation, LiDAR contours, trilateration,
+LiDAR ground elevation, ground profile.
+
+**Not planned: a 3D render.** The data supports it — bare-earth LiDAR, canopy
+stripped — but a renderer means WebGL and a bundler, which is the one line this
+app does not cross, and standing in the terrain a 3D picture of that terrain is
+worth very little. For a desktop render use QGIS with Qgis2threejs on the same
+DEM, or the raw point cloud from Maine GeoLibrary or USGS 3DEP if you want the
+trees and walls rather than bare earth.
 
 Do not add a JS framework or a bundler. The single-file, no-build-step property
 is what makes this survivable in the field.
