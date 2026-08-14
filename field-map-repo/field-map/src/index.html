@@ -191,6 +191,24 @@
       <dl class="dl"><dt>Result</dt><dd id="pjOut">—</dd></dl>
     </div>
     <div class="dat">
+      <h4>Trilaterate</h4>
+      <p class="hint" style="margin:0 0 9px">For a point under canopy where GNSS will not converge. Tape
+        to it from two or three things you can stand on, and solve. Distances are <b>horizontal</b> feet
+        &mdash; on a slope, hold the tape level or the answer is long.</p>
+      <div class="row"><select id="tA"></select><input id="tAd" placeholder="ft" inputmode="decimal"></div>
+      <div class="row"><select id="tB"></select><input id="tBd" placeholder="ft" inputmode="decimal"></div>
+      <div class="row"><select id="tC"></select><input id="tCd" placeholder="ft (optional)" inputmode="decimal"></div>
+      <div class="row"><button class="btn pri" id="triGo">Solve</button></div>
+      <dl class="dl"><dt>Position</dt><dd id="triOut">&mdash;</dd></dl>
+      <dl class="dl"><dt>Residuals</dt><dd id="triRes">&mdash;</dd></dl>
+      <div class="row"><button class="btn sm" id="triSave" disabled>Save as mark</button>
+        <button class="btn sm" id="triFlip" style="display:none">Other solution</button></div>
+      <p class="hint" style="margin:9px 2px 0">Residuals are the whole point. Three tapes agreeing to a
+        hundredth have found it; three leaving 4 ft mean a tape was misread, a control point is
+        mis-identified, or the plan corner is not where the plan says.</p>
+    </div>
+
+    <div class="dat">
       <h4>Measure between</h4>
       <div class="fld"><label class="f">From</label><select id="pjA"></select></div>
       <div class="fld"><label class="f">To</label><select id="pjB"></select></div>

@@ -1261,13 +1261,28 @@ function resolvePoint(key){
 function fillPointSelects(){
   const opts=list=>list.map(o=>'<option value="'+esc(o.k)+'">'+esc(o.label)+'</option>').join('');
   const a=$('pjFrom').value, b=$('pjA').value, c=$('pjB').value;
+  const ta=$('tA').value, tb=$('tB').value, tc=$('tC').value;
   const html=opts(pointList(true));
   $('pjFrom').innerHTML=html; $('pjA').innerHTML=html; $('pjB').innerHTML=html;
+  /* Control points are things you can stand on, so "My position" is not one. */
+  const ctrlHtml=opts(pointList(false));
+  $('tA').innerHTML=ctrlHtml; $('tB').innerHTML=ctrlHtml; $('tC').innerHTML=ctrlHtml;
   if(a) $('pjFrom').value=a;
   if(b) $('pjA').value=b;
   if(c) $('pjB').value=c;
+  if(ta) $('tA').value=ta;
+  if(tb) $('tB').value=tb;
+  if(tc) $('tC').value=tc;
   if(!$('pjB').value && $('pjB').options.length>1) $('pjB').selectedIndex=1;
+  if(!$('tB').value && $('tB').options.length>1) $('tB').selectedIndex=1;
+  if(!$('tC').value && $('tC').options.length>2) $('tC').selectedIndex=2;
 }
+$('triGo').onclick=runTri;
+$('triFlip').onclick=()=>{ if(triSol&&triSol.other) showTri(triSol.other,triSol.self,triSol.ctrl); };
+$('triSave').onclick=()=>{ if(!triSol) return;
+  addMark(triSol.lat,triSol.lon,{acc:null,name:'Trilaterated',
+    note:'Taped from '+triSol.ctrl.map(c=>c.label).join(', ')+' — RMS '+triSol.rms.toFixed(2)+' ft'}); };
+
 $('pjGo').onclick=()=>{
   const from=resolvePoint($('pjFrom').value);
   if(!from) return toast('No GPS fix yet');
@@ -1293,6 +1308,116 @@ function paintMeasure(){
 }
 $('pjA').onchange=paintMeasure; $('pjB').onchange=paintMeasure;
 
+
+/* ── Trilateration ──────────────────────────────────────────────────────
+   Under heavy canopy GNSS does not converge, and no amount of averaging fixes a
+   sky you cannot see. A tape does not care about canopy. Measure to the unknown
+   point from two or three things you can stand on -- plan corners, or monuments
+   you have already found -- and solve for where it must be.
+
+   Everything happens in State Plane feet, like gridVec, so the distances being
+   solved are the same distances the deed states. Gauss-Newton on
+   r_i = |p - c_i| - d_i: the Jacobian row is just the unit vector from control
+   point to estimate, which makes each step a 2x2 solve.
+
+   The residuals are the point of the exercise. Three tapes that agree to a
+   hundredth have found the corner; three that leave 4 ft on the table mean a
+   tape was read wrong, a control point is mis-identified, or the plan corner
+   is not where the plan says. */
+function trilaterate(ctrl, guess){
+  /* ctrl: [{e,n,d}] in State Plane feet. guess: [e,n]. */
+  let e=guess[0], n=guess[1];
+  for(let it=0; it<40; it++){
+    let a=0,b=0,c=0, g0=0,g1=0, moved=0;
+    for(const o of ctrl){
+      const de=e-o.e, dn=n-o.n;
+      const r=Math.hypot(de,dn) || 1e-9;
+      const ue=de/r, un=dn/r;                    // unit vector, one Jacobian row
+      const res=r-o.d;
+      a+=ue*ue; b+=ue*un; c+=un*un;             // J'J, symmetric 2x2
+      g0+=ue*res; g1+=un*res;                    // J'r
+    }
+    const det=a*c-b*b;
+    if(Math.abs(det)<1e-12) break;               // control points collinear with p
+    const de=(c*g0-b*g1)/det, dn=(a*g1-b*g0)/det;
+    e-=de; n-=dn;
+    moved=Math.hypot(de,dn);
+    if(moved<1e-4) break;                        // 0.0001 ft; well past tape resolution
+  }
+  const res=ctrl.map(o=>Math.hypot(e-o.e,n-o.n)-o.d);
+  const rms=Math.sqrt(res.reduce((t,r)=>t+r*r,0)/res.length);
+  return {e,n,res,rms};
+}
+/* Two circles meet in two places, and no amount of least squares picks between
+   them -- the pair is a genuine ambiguity, not a weakness in the solver. Both
+   are offered and the current fix breaks the tie when there is one. */
+function twoCircle(c1,c2){
+  const dx=c2.e-c1.e, dy=c2.n-c1.n, D=Math.hypot(dx,dy);
+  if(D<1e-9 || D>c1.d+c2.d || D<Math.abs(c1.d-c2.d)) return null;   // nested or disjoint
+  const a=(c1.d*c1.d-c2.d*c2.d+D*D)/(2*D);
+  const h2=c1.d*c1.d-a*a;
+  const h=Math.sqrt(Math.max(h2,0));
+  const xm=c1.e+a*dx/D, ym=c1.n+a*dy/D;
+  return [[xm+h*dy/D, ym-h*dx/D], [xm-h*dy/D, ym+h*dx/D]];
+}
+let triSol=null;
+function runTri(){
+  /* Clear first. Every refusal below returns early, and leaving the previous
+     answer on screen beside rejected inputs invites saving a mark the solver
+     never agreed to. */
+  triSol=null; $('triSave').disabled=true;
+  $('triOut').textContent='—'; $('triRes').textContent='—';
+  const rows=[['tA','tAd'],['tB','tBd'],['tC','tCd']];
+  const ctrl=[];
+  for(const [sel,dist] of rows){
+    const txt=$(dist).value.trim();
+    if(!txt) continue;
+    const d=Number(txt);
+    if(!isFinite(d)||d<=0){ return toast('Distances must be a number of feet'); }
+    const ll=resolvePoint($(sel).value);
+    if(!ll){ return toast('Pick a control point that has a position'); }
+    const sp=toSP(ll[0],ll[1]);
+    ctrl.push({e:sp[0],n:sp[1],d,label:$(sel).selectedOptions[0].textContent});
+  }
+  if(ctrl.length<2) return toast('Two distances at least — three to check the work');
+
+  let starts=[];
+  if(ctrl.length===2){
+    const pair=twoCircle(ctrl[0],ctrl[1]);
+    if(!pair) return toast('Those two circles never meet — check the distances');
+    starts=pair;
+  } else {
+    starts=[[ctrl.reduce((t,o)=>t+o.e,0)/ctrl.length, ctrl.reduce((t,o)=>t+o.n,0)/ctrl.length]];
+  }
+  const sols=starts.map(g=>trilaterate(ctrl,g));
+  /* Both branches of a two-circle fix have zero residual -- least squares cannot
+     tell them apart, and they can be hundreds of feet apart. Standing nearer one
+     of them is the only evidence available, and with no fix there is none, so
+     the mirror is offered rather than quietly discarded. */
+  if(me){ const sp=toSP(me.lat,me.lon);
+          sols.forEach(s=>s.near=Math.hypot(s.e-sp[0],s.n-sp[1]));
+          sols.sort((a,b)=>a.near-b.near); }
+  else sols.sort((a,b)=>a.rms-b.rms);
+  showTri(sols[0], sols[1]||null, ctrl);
+}
+function showTri(best, other, ctrl){
+  const ll=fromSP(best.e,best.n);
+  triSol={lat:ll[0],lon:ll[1],rms:best.rms,ctrl,other,self:best};
+  $('triOut').innerHTML=`${ll[0].toFixed(7)}, ${ll[1].toFixed(7)}<br>`
+    +`E ${best.e.toFixed(2)} N ${best.n.toFixed(2)}`;
+  let note='';
+  if(other){
+    const apart=Math.hypot(best.e-other.e,best.n-other.n);
+    note='<br>Two tapes fit <b>two</b> points, '+fmtFt(apart)+' apart. '
+       +(me?'Showing the one nearer your fix.':'<b>No fix to choose between them.</b>')
+       +' A third tape settles it.';
+  }
+  $('triRes').innerHTML=ctrl.map((o,i)=>
+    `${esc(o.label)}: ${(best.res[i]>=0?'+':'')+best.res[i].toFixed(2)} ft`).join('<br>')
+    +`<br><b>RMS ${best.rms.toFixed(2)} ft</b>`+note;
+  $('triSave').disabled=false;
+  $('triFlip').style.display=other?'':'none';
+}
 
 /* ══════════════════════════════════════════════════════════════
    14. FIT
