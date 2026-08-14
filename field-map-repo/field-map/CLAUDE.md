@@ -48,6 +48,16 @@ two levels up. Both `cd` into this directory via `defaults.run.working-directory
 | `scripts/lock.py` | non-interactive "Lock a copy", for CI |
 | `native/` | Capacitor wrapper (Android), see its own README |
 
+The `HIST` catalogue in `app.js` lists the Maine GeoLibrary historical layers —
+scanned USGS quads and state ortho flights, ImageServer `exportImage` endpoints
+with open CORS and no key. **Every entry was checked against this parcel's own
+bbox before being listed**, which is the only way to tell a live service from one
+that answers and returns an empty tile here: `Maine_Elevation_DEM_2024` and
+`orthoRegional2022` both do, so they are deliberately absent. `nz` is
+`maxNativeZoom` — `exportImage` renders any bbox you ask for, so without a ceiling
+the app caches tiles far past the resolution the source holds. Re-run the bbox
+check before adding a year.
+
 `src/app.js` sections, in order: projection, geometry, storage, tiles, map,
 parcel, sun/grid/magnetic, GPS, wake lock, averaging, track, marks, edit sheet,
 navigate-to, walk-a-line, **stake and measure**, fit, sync, export, tile cache,
@@ -238,7 +248,9 @@ make the output differ by platform.
   would let a stale downloaded bundle outrank a freshly installed APK.
 - **No barometer in the browser.** No web API for it. The APK has one
   (`FieldSensors.java`), used for relative height only.
-- **Tile cache has no eviction.** "Clear cache" is manual.
+- **Tile cache has no eviction.** "Clear cache" is manual, and the nine
+  historical years each cache separately (`getCacheId()` carries the year), so
+  caching several of them multiplies the storage.
 - **90 days offline** can resurrect deleted marks (tombstone expiry).
 - **Photos and tiles are not mirrored** to app-private storage in the APK — only
   the small `fm_` keys are. They are IndexedDB blobs and would be tens of

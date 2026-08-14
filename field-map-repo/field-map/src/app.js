@@ -252,6 +252,46 @@ const MaineHS = CachedTiles.extend({
                                            : 'hs_'+hsOpt.mode+'_'+hsOpt.z; }
 });
 
+/* Maine GeoLibrary republishes the scanned USGS quads and every ortho flight the
+   state has paid for, as ImageServer exportImage endpoints with open CORS and no
+   key. Each entry below was checked against this parcel's own bbox before it was
+   listed -- Maine_Elevation_DEM_2024 and orthoRegional2022 answer but return an
+   empty tile here, so they are deliberately absent.
+
+   The two topo sheets are the reason this exists. The monuments in this deed were
+   set into a landscape those sheets recorded, and the imagery is a second axis:
+   an ortho from before thirty years of regrowth shows stone walls and cart roads
+   that today's canopy hides completely.
+
+   nz is maxNativeZoom -- exportImage will happily render any bbox, so without a
+   ceiling the app would request and cache tiles far past the resolution the
+   source actually holds. */
+const HIST=[
+  {label:'1910',      p:'Topo/topoUsgs24k1910',                       nz:17, a:'USGS 1:24k 1910 — Maine GeoLibrary'},
+  {label:'1945',      p:'Topo/topoUsgs24k1945',                       nz:17, a:'USGS 1:24k 1945 — Maine GeoLibrary'},
+  {label:'1996 DOQ',  p:'Regional/orthoRegionalDoq1996_1998',         nz:17, a:'USGS DOQ 1996–98 — Maine GeoLibrary'},
+  {label:'1998 city', p:'Municipal/orthoMunicipalAuburn1998',         nz:19, a:'Auburn 1998 — Maine GeoLibrary'},
+  {label:'2006 city', p:'Municipal/orthoMunicipalLewistonAuburn2006', nz:19, a:'Lewiston–Auburn 2006 — Maine GeoLibrary'},
+  {label:'2013 NAIP', p:'NAIP/orthoNaip2013',                         nz:18, a:'NAIP 2013 — Maine GeoLibrary'},
+  {label:'2014 topo', p:'Topo/topoUsgs24k2014',                       nz:17, a:'USGS 1:24k 2014 — Maine GeoLibrary'},
+  {label:'2018 NAIP', p:'NAIP/orthoNaip2018',                         nz:18, a:'NAIP 2018 — Maine GeoLibrary'},
+  {label:'2018 city', p:'Municipal/orthoMunicipalLewistonAuburn2018', nz:19, a:'Lewiston–Auburn 2018 — Maine GeoLibrary'}
+];
+let histIdx=(()=>{ const i=+store.get('fm_hist'); return Number.isInteger(i)&&i>=0&&i<HIST.length?i:0; })();
+
+/* One layer, nine sources. getCacheId() carries the year, so switching years
+   never collides in the tile store and each one caches on its own -- which is
+   what you want, since you pick a year on wifi and take that one into the woods. */
+const MaineImage = CachedTiles.extend({
+  getTileUrl(c){
+    const R=20037508.342789244, n=Math.pow(2,c.z);
+    const x0=c.x/n*2*R-R, x1=(c.x+1)/n*2*R-R, y0=R-(c.y+1)/n*2*R, y1=R-c.y/n*2*R;
+    return 'https://gis.maine.gov/image/rest/services/'+HIST[histIdx].p+'/ImageServer/exportImage'
+      +`?bbox=${x0},${y0},${x1},${y1}&bboxSR=3857&imageSR=3857&size=256,256&format=png&f=image`;
+  },
+  getCacheId(){ return 'hist_'+HIST[histIdx].label.replace(/\s+/g,''); }
+});
+
 /* L.TileLayer.getTileUrl() fills {z} from the LAYER's current zoom, not from the
    coords you hand it. That is fine for on-screen tiles, where the two always
    agree, and silently wrong for a pre-cache job that walks z0..z0+3 while the map
@@ -295,7 +335,9 @@ const bases={
  'Topo': new CachedTiles('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
     {maxZoom:21,maxNativeZoom:19,attribution:esriAttr,cacheId:'topo'}),
  'Street': new CachedTiles('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    {maxZoom:19,attribution:'© OpenStreetMap',cacheId:'osm'})
+    {maxZoom:19,attribution:'© OpenStreetMap',cacheId:'osm'}),
+ 'Historical': new MaineImage('',{maxZoom:21,maxNativeZoom:HIST[histIdx].nz,
+    attribution:HIST[histIdx].a,cacheId:'hist'})
 };
 let curBase=bases['Satellite']; curBase.addTo(map);
 
@@ -1584,7 +1626,7 @@ $('cWipe').onclick=async()=>{ await idbClear('tiles'); cacheStats(); toast('Tile
 /* ══════════════════════════════════════════════════════════════
    17. LAYERS + ORIENTATION + UI
    ══════════════════════════════════════════════════════════════ */
-const swatch={'Satellite':'#3a5a3a','LiDAR hillshade':'#9aa0a6','USGS topo':'#d8cba8','USGS imagery + topo':'#7d8f6a','Topo':'#c8b48a','Street':'#8fa9c8'};
+const swatch={'Satellite':'#3a5a3a','LiDAR hillshade':'#9aa0a6','USGS topo':'#d8cba8','USGS imagery + topo':'#7d8f6a','Topo':'#c8b48a','Street':'#8fa9c8','Historical':'#b08968'};
 $('baseList').innerHTML=Object.keys(bases).map(k=>
   `<div class="lyr${bases[k]===curBase?' on':''}" data-b="${k}"><span class="sw" style="background:${swatch[k]}"></span>
    <span class="tx">${k}</span><span class="ck">${bases[k]===curBase?'ON':''}</span></div>`).join('');
@@ -1594,6 +1636,31 @@ $('baseList').onclick=e=>{
   [...$('baseList').children].forEach(c=>{const on=c.dataset.b===el.dataset.b;
     c.classList.toggle('on',on); c.querySelector('.ck').textContent=on?'ON':'';});
 };
+/* Year picker for the Historical basemap. Selecting a year also selects the
+   layer, because wanting 1945 and not wanting to look at it is not a state worth
+   supporting. The layer is removed and re-added rather than redrawn: that is what
+   makes Leaflet's attribution control pick up the new credit line, and every one
+   of these sources has a different one. */
+function paintHist(){
+  const h=HIST[histIdx];
+  $('histNow').textContent=h.a;
+  [...$('histRow').children].forEach(b=>b.classList.toggle('sel',+b.dataset.hy===histIdx));
+}
+function setHist(i){
+  if(!(i>=0&&i<HIST.length)) return;
+  histIdx=i; store.set('fm_hist',String(i));
+  const L=bases['Historical'], h=HIST[i];
+  L.options.maxNativeZoom=h.nz; L.options.attribution=h.a;
+  if(map.hasLayer(L)) map.removeLayer(L);
+  map.removeLayer(curBase); curBase=L; L.addTo(map); L.bringToBack();
+  [...$('baseList').children].forEach(c=>{const on=c.dataset.b==='Historical';
+    c.classList.toggle('on',on); c.querySelector('.ck').textContent=on?'ON':'';});
+  paintHist();
+}
+$('histRow').innerHTML=HIST.map((h,i)=>`<button class="btn sm" data-hy="${i}">${esc(h.label)}</button>`).join('');
+$('histRow').onclick=e=>{ const b=e.target.closest('[data-hy]'); if(b) setHist(+b.dataset.hy); };
+paintHist();
+
 $('ovList').innerHTML=Object.entries(STY).map(([k,s])=>
   `<div class="lyr${s.off?'':' on'}" data-o="${k}"><span class="sw" style="background:${s.color}"></span>
    <span class="tx">${s.label}</span><span class="ck">${s.off?'':'ON'}</span></div>`).join('');

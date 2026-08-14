@@ -86,6 +86,8 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--ink);c
 .btn.rec{background:var(--bad);border-color:var(--bad);color:#fff}
 .btn.sm{padding:10px 8px;font-size:13px;min-height:46px}
 .btn:disabled{opacity:.4}
+.btn.sel{border-color:var(--flag);color:var(--flag)}
+.row.wrap{flex-wrap:wrap}
 .row{display:flex;gap:8px;margin-bottom:10px}
 .row>*{flex:1;min-width:0}
 input,select,textarea{width:100%;background:var(--ink);color:var(--paper);border:1px solid var(--line);

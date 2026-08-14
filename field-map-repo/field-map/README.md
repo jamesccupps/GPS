@@ -5,6 +5,10 @@ Runs in a phone browser with no signal, or as a sideloaded Android app.
 
 - Survey parcel from the recorded deed, drawn over satellite, USGS topo, or
   Maine statewide LiDAR hillshade with adjustable sun angle
+- **Historical basemaps, 1910 to 2018** — the scanned USGS quads and every state
+  ortho flight over this parcel, on a year picker. The monuments were set into a
+  landscape the old sheets recorded, and imagery from before thirty years of
+  regrowth shows walls and cart roads today's canopy hides
 - GPS marking with accuracy-weighted averaging and outlier rejection
 - Inside/outside the parcel, distance to the nearest boundary, nearest corner
 - Navigate to a mark or corner; walk a deed line with live cross-track error
