@@ -54,8 +54,18 @@ HERE = Path(__file__).resolve().parent.parent
 PARCEL = HERE / "data/parcel.geojson"
 OUT = HERE / "native/tiles"
 
+# Two bands, because one box cannot be both tight and wide. The parcel needs
+# detail, but the phone screen at the opening zoom is several thousand feet
+# across, so a 600 ft box leaves black bands above and below it with no network
+# -- which is exactly what a fresh offline install showed.
+#
+# Low zooms are almost free: a z12 tile covers about nine miles, so three miles
+# of context costs a few dozen tiles per layer against the hundreds the tight
+# band needs. Detail where you walk, context when you pinch out.
 MARGIN_FT = 600
 ZOOM_LO, ZOOM_HI = 15, 19
+WIDE_MARGIN_FT = 16000          # ~3 miles
+WIDE_LO, WIDE_HI = 11, 14
 
 ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services"
 USGS = "https://basemap.nationalmap.gov/arcgis/rest/services"
@@ -126,22 +136,23 @@ for _cid, _path, _nz in HIST:
     LAYERS[_cid] = (export(f"{MAINE}/{_path}/ImageServer/exportImage"), _nz)
 
 
-def parcel_bounds():
-    """South, west, north, east of the parcel plus MARGIN_FT, in degrees."""
+def parcel_bounds(margin_ft=MARGIN_FT):
+    """South, west, north, east of the parcel plus a margin, in degrees."""
     g = json.loads(PARCEL.read_text(encoding="utf-8"))
     ring = next(f["geometry"]["coordinates"][0] for f in g["features"]
                 if f.get("properties", {}).get("style") == "p1")
     lons = [c[0] for c in ring]
     lats = [c[1] for c in ring]
-    d_lat = MARGIN_FT / 364000
+    d_lat = margin_ft / 364000
     mid = (min(lats) + max(lats)) / 2
     d_lon = d_lat / max(math.cos(math.radians(mid)), 0.1)
     return min(lats) - d_lat, min(lons) - d_lon, max(lats) + d_lat, max(lons) + d_lon
 
 
-def tiles_for(nz, s, w, n_, e):
+def tiles_for(nz, s, w, n_, e, lo=None, hi=None):
     out = []
-    for z in range(min(ZOOM_LO, nz), min(ZOOM_HI, nz) + 1):
+    for z in range(min(lo if lo is not None else ZOOM_LO, nz),
+                   min(hi if hi is not None else ZOOM_HI, nz) + 1):
         n = 2 ** z
         x1 = int((w + 180) / 360 * n)
         x2 = int((e + 180) / 360 * n)
@@ -203,8 +214,10 @@ def ext_for(ct):
 
 
 def run(only, dry):
-    s, w, n_, e = parcel_bounds()
-    print(f"parcel + {MARGIN_FT} ft: {s:.5f},{w:.5f} .. {n_:.5f},{e:.5f}")
+    tight = parcel_bounds()
+    wide = parcel_bounds(WIDE_MARGIN_FT)
+    print(f"tight z{ZOOM_LO}-{ZOOM_HI}: {tight[0]:.5f},{tight[1]:.5f} .. {tight[2]:.5f},{tight[3]:.5f}")
+    print(f"wide  z{WIDE_LO}-{WIDE_HI}: {wide[0]:.5f},{wide[1]:.5f} .. {wide[2]:.5f},{wide[3]:.5f}")
     OUT.mkdir(parents=True, exist_ok=True)
 
     jobs_by_host = {}
@@ -212,7 +225,9 @@ def run(only, dry):
     for cid, (build, nz) in LAYERS.items():
         if only and cid not in only:
             continue
-        for (z, x, y) in tiles_for(nz, s, w, n_, e):
+        coords = (tiles_for(nz, *wide, lo=WIDE_LO, hi=WIDE_HI)
+                  + tiles_for(nz, *tight))
+        for (z, x, y) in coords:
             url = build(z, x, y)
             total += 1
             jobs_by_host.setdefault(host_of(url), []).append((cid, z, x, y, url))
