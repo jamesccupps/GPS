@@ -60,9 +60,24 @@ def build_id() -> str:
     return sha[:7] or "local"
 
 
+def pack_manifest() -> str:
+    """The bundled tile manifest, inlined rather than fetched.
+
+    A fetch would race the first tiles: the map starts requesting them while the
+    manifest is still in flight, so the opening screen would come off the network
+    -- from the one server this pack exists to stop depending on. Inlining costs
+    a couple of hundred bytes and removes the race entirely.
+    """
+    m = HERE / "tiles/manifest.json"
+    if not m.exists():
+        return "null"
+    return m.read_text(encoding="utf-8").strip()
+
+
 def tag() -> str:
     return ("<script>window.__FIELDMAP_NATIVE__=1;"
-            "window.__FIELDMAP_BUILD__=" + repr(build_id()) + ";</script>" + NL +
+            "window.__FIELDMAP_BUILD__=" + repr(build_id()) + ";"
+            "window.__FIELDMAP_PACK__=" + pack_manifest() + ";</script>" + NL +
             '<script src="native.js"></script>' + NL)
 
 
@@ -96,6 +111,18 @@ def assemble(run_build: bool) -> None:
     stale = WWW / "sw.js"
     if stale.exists():
         stale.unlink()
+
+    # The bundled tiles, if scripts/tilepack.py has been run. Copied rather than
+    # symlinked because Capacitor's sync copies www/ into the APK assets.
+    src_tiles = HERE / "tiles"
+    dst_tiles = WWW / "tiles"
+    if src_tiles.exists():
+        if dst_tiles.exists():
+            shutil.rmtree(dst_tiles)
+        shutil.copytree(src_tiles, dst_tiles)
+        n = sum(1 for _ in dst_tiles.rglob("*") if _.is_file())
+        mb = sum(f.stat().st_size for f in dst_tiles.rglob("*") if f.is_file()) / 1048576
+        print(f"www/tiles  {n} files  {mb:.1f} MB")
 
     kb = (WWW / "index.html").stat().st_size // 1024
     print(f"www/index.html  {kb} KB  (unlocked, shim injected, no service worker)")

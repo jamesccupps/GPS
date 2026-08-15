@@ -56,6 +56,37 @@ jobs:
       - name: Install the Capacitor toolchain
         run: npm ci
 
+      # The pack is ~140 MB of tiles for the parcel, eleven of whose sixteen
+      # layers come from a render-on-demand state server that spends part of its
+      # life returning 500s. Fetched once and carried in the cache: re-fetching it
+      # every build would hammer that host for no benefit and would fail whenever
+      # it was having a bad afternoon.
+      - name: Restore the bundled tile pack
+        uses: actions/cache/restore@v4
+        with:
+          path: field-map-repo/field-map/native/tiles
+          key: tilepack-v1-${{ hashFiles('field-map-repo/field-map/scripts/tilepack.py', 'field-map-repo/field-map/data/parcel.geojson') }}-${{ github.run_number }}
+          restore-keys: |
+            tilepack-v1-${{ hashFiles('field-map-repo/field-map/scripts/tilepack.py', 'field-map-repo/field-map/data/parcel.geojson') }}-
+
+      # Skips everything already present, so this is a no-op once the pack is
+      # complete and a gap-filler while it is not. It never fails the build: a
+      # partial pack still beats none, and the app falls back to the network for
+      # anything missing.
+      - name: Fill any gaps in the tile pack
+        id: tilepack
+        run: python3 scripts/tilepack.py
+        working-directory: field-map-repo/field-map
+
+      # Only when something new arrived, or every push would store another
+      # 140 MB copy and evict the rest of the cache.
+      - name: Save the tile pack
+        if: steps.tilepack.outputs.fetched != '0'
+        uses: actions/cache/save@v4
+        with:
+          path: field-map-repo/field-map/native/tiles
+          key: tilepack-v1-${{ hashFiles('field-map-repo/field-map/scripts/tilepack.py', 'field-map-repo/field-map/data/parcel.geojson') }}-${{ github.run_number }}
+
       - name: Assemble www/ from the web build
         run: python3 scripts/assemble.py --build
 
@@ -89,8 +120,10 @@ jobs:
         run: |
           APK=android/app/build/outputs/apk/debug/app-debug.apk
           ls -l "$APK"
-          echo "size: $(( $(stat -c%s "$APK") / 1024 )) KB"
+          echo "size: $(( $(stat -c%s "$APK") / 1048576 )) MB"
           unzip -l "$APK" | grep -E "assets/public/(index.html|native.js)|classes.dex" || true
+          echo "bundled tiles in the APK: $(unzip -l "$APK" | grep -c 'assets/public/tiles/' || true)"
+          python3 ../scripts/tilepack.py --report || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -128,6 +161,10 @@ jobs:
             echo
             echo "Contains the unlocked parcel, like every build that is not the"
             echo "locked copy published to Pages."
+            echo
+            echo "Map tiles for the parcel are bundled, so a fresh install draws"
+            echo "the map with no network at all. Layers not in the pack, and"
+            echo "anywhere outside it, still fetch as before."
             echo
             echo "Built from ${GITHUB_SHA} at ${BUILT}."
             echo

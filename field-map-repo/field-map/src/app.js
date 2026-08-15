@@ -243,6 +243,16 @@ async function pool(items, limit, worker){
   }));
 }
 
+/* Tiles bundled with the build, listed by scripts/tilepack.py and inlined by
+   assemble.py so there is no manifest fetch to race the first tiles. Only the
+   APK carries them; in a browser this is null and nothing below changes.
+
+   They are read straight off local storage as an <img> src -- no fetch, no
+   IndexedDB, no network -- which is the entire point: eleven of the sixteen
+   layers come from a state server that renders each tile on demand and spends
+   part of its life returning 500s. A fresh install now draws them anyway. */
+const PACK=(window.__FIELDMAP_PACK__&&window.__FIELDMAP_PACK__.packs)||null;
+
 const CachedTiles = L.TileLayer.extend({
   createTile(coords, done){
     const img=document.createElement('img');
@@ -252,7 +262,8 @@ const CachedTiles = L.TileLayer.extend({
     const key=cid+'/'+coords.z+'/'+coords.x+'/'+coords.y;
     const direct=()=>{ img.onload=()=>done(null,img); img.onerror=()=>done(new Error('tile'),img);
                        img.crossOrigin=''; img.src=url; };
-    if(!cacheOn || !db) { direct(); return img; }
+    const fromCache=()=>{
+    if(!cacheOn || !db) { direct(); return; }
     idbGet('tiles',key).then(blob=>{
       /* A cached blob that will not decode used to wedge this tile forever: no
          onerror, so done() was never called, the tile stayed blank offline and
@@ -276,6 +287,17 @@ const CachedTiles = L.TileLayer.extend({
         }).catch(direct);
       }
     }).catch(direct);
+    };
+    /* A pack miss is a local 404 and costs nothing, but the extension has to be
+       right or every tile would try twice -- hence ext in the manifest. */
+    const pk=PACK&&PACK[cid];
+    if(pk && coords.z>=pk.zMin && coords.z<=pk.zMax){
+      img.onload=()=>done(null,img);
+      img.onerror=()=>{ img.onload=null; img.onerror=null; fromCache(); };
+      img.src='tiles/'+cid+'/'+coords.z+'/'+coords.x+'/'+coords.y+pk.ext;
+      return img;
+    }
+    fromCache();
     return img;
   }
 });

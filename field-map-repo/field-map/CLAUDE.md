@@ -280,6 +280,19 @@ make the output differ by platform.
 - **Tile cache has no eviction.** "Clear cache" is manual, and the nine
   historical years each cache separately (`getCacheId()` carries the year), so
   caching several of them multiplies the storage.
+- **Tiles for the parcel are bundled into the APK.** `scripts/tilepack.py`
+  fetches the parcel extent plus 600 ft for all 21 caches into `native/tiles/`
+  (gitignored, ~140 MB); `assemble.py` copies it into `www/` and **inlines
+  `manifest.json`** as `window.__FIELDMAP_PACK__`, because fetching the manifest
+  would race the first tiles and the opening screen would come off the network.
+  `createTile` reads the pack before IndexedDB and before the network, straight
+  off local storage as an `<img>` src. CI restores the pack from an Actions
+  cache, fills gaps, and only re-saves when something new arrived.
+  **The cache ids in `tilepack.py` must match `getCacheId()` exactly** — they are
+  the path the app looks under. A mismatch is not fatal (the app only tries ids
+  the manifest lists, and falls back to the network) but it silently wastes the
+  pack. `hs_*` ids embed the sun angle *and the exaggeration*, so a pack built at
+  3× is not found at 5×.
 - **`gis.maine.gov` renders every tile on demand and falls over.** It serves 11
   of the 16 cacheable layers — the hillshade, the contours and all nine
   historical years — and sits behind an ArcGIS Web Adaptor that returns a 500
