@@ -189,6 +189,60 @@ const idbCount= (s)     => idb(s,'readonly',  st=>st.count());   /* cacheStats w
    headers; if a fetch fails we fall back to a plain <img> load.
    ══════════════════════════════════════════════════════════════ */
 let cacheOn = true;
+
+/* ── Fetching tiles from services that fail on purpose ──────────────────
+   Two of the four tile sources are not tile sources at all. Esri, USGS and OSM
+   serve a pre-rendered pyramid: a tile is a file lookup. gis.maine.gov renders
+   every tile on demand -- the hillshade, the contours and all nine historical
+   years -- and sits behind an ArcGIS Web Adaptor that answers with a 500
+   "Application Error" page when it is busy.
+
+   The browser cannot even see that 500. The error page carries no CORS headers,
+   so fetch rejects with "Failed to fetch" and a service having a bad minute is
+   indistinguishable from having no signal. Measured from one machine, one
+   minute apart: Esri 12/12 tiles while Maine returned 0/12, then recovered on
+   its own.
+
+   Two consequences, and the second is the one that made the app feel broken:
+   these failures are transient and must be retried, and hammering that host is
+   what causes them, so it gets a much smaller share of connections than the
+   pre-rendered services do. */
+const HOST_LIMITS=[[/gis\.maine\.gov/, 2]];
+const TILE_TIMEOUT=20000;
+function hostLimit(url){
+  for(const [re,n] of HOST_LIMITS) if(re.test(url)) return n;
+  return 6;                                   // browsers cap around six per host anyway
+}
+/* Resolves to a Blob, or null once the failure looks permanent. A 404 will not
+   improve by asking again; a 500, a 429 and a thrown fetch all might. */
+async function fetchTile(url, tries){
+  tries=tries||3;
+  let wait=400;
+  for(let i=0;i<tries;i++){
+    const ac=new AbortController();
+    const to=setTimeout(()=>ac.abort(), TILE_TIMEOUT);
+    try{
+      const r=await fetch(url,{mode:'cors',signal:ac.signal});
+      clearTimeout(to);
+      /* Status alone is not enough: a captive portal answers every tile 200 with
+         an HTML login page, which then lives in the cache as a tile. */
+      if(r.ok && /^image\//.test(r.headers.get('content-type')||'')) return await r.blob();
+      if(r.status && r.status<500 && r.status!==429) return null;
+    }catch(e){ clearTimeout(to); }
+    if(i<tries-1){ await new Promise(r=>setTimeout(r,wait)); wait*=3; }
+  }
+  return null;
+}
+/* Fixed-size worker pool. Serial fetching was costing 1120 ms for twelve Esri
+   tiles that six workers pull in 28 ms -- on a job of three thousand that is the
+   difference between a coffee and an afternoon. */
+async function pool(items, limit, worker){
+  let next=0;
+  await Promise.all(Array.from({length:Math.max(1,Math.min(limit,items.length))}, async()=>{
+    while(next<items.length){ const i=next++; await worker(items[i], i); }
+  }));
+}
+
 const CachedTiles = L.TileLayer.extend({
   createTile(coords, done){
     const img=document.createElement('img');
@@ -209,7 +263,12 @@ const CachedTiles = L.TileLayer.extend({
       else {
         /* status alone is not enough: a captive portal answers every tile 200
            with an HTML login page, which then lives in the cache as a tile. */
-        fetch(url,{mode:'cors'}).then(r=>r.ok&&/^image\//.test(r.headers.get('content-type')||'')?r.blob():Promise.reject()).then(bl=>{
+        /* Two tries on a live tile, not three: a blank square you can pan away
+           from is better than a map that freezes while it insists. Before this,
+           one 500 from a busy render server left that square blank until you
+           left the area and came back, because Leaflet never asks twice. */
+        fetchTile(url,2).then(bl=>{
+          if(!bl) return direct();
           idbPut('tiles',key,bl).catch(()=>{});
           img.onload=()=>{ URL.revokeObjectURL(img.src); done(null,img); };
           img.onerror=()=>{ URL.revokeObjectURL(img.src); idbDel('tiles',key).catch(()=>{}); direct(); };
@@ -1997,50 +2056,140 @@ async function cacheStats(){
     $('cSize').textContent=(e.usage/1048576).toFixed(1)+' MB used';
   } else $('cSize').textContent='—';
 }
-$('cSave').onclick=async()=>{
+/* Two entry points, one engine. "This view" takes what is on screen; "every
+   layer" walks the whole basemap list, which is only practical now that the
+   pre-rendered services go six at a time -- 45 tiles in 0.3 s where the old
+   serial loop took seconds. The Maine-hosted layers stay at two connections and
+   will still be the slow part; the circuit breaker keeps a bad day for that
+   service from turning into a long one for you. */
+/* The parcel and a margin around it, rather than wherever the map is pointing.
+   What you want before a trip is deterministic coverage of the ground you will
+   walk, and "the current view" is only that by accident. Uses the shifted
+   geometry, so a Fit moves the cached box with the parcel. */
+function parcelBounds(marginFt){
+  const f=PARCEL.features.find(x=>x.properties.style==='p1');
+  const ring=f&&f.geometry.coordinates[0];
+  if(!ring||!ring.length) return map.getBounds();
+  let s=Infinity,n=-Infinity,w=Infinity,e=-Infinity;
+  for(const c of ring){ const ll=sh(c);
+    if(ll[0]<s)s=ll[0]; if(ll[0]>n)n=ll[0]; if(ll[1]<w)w=ll[1]; if(ll[1]>e)e=ll[1]; }
+  const dLat=(marginFt||600)/364000;
+  const dLon=dLat/Math.max(Math.cos((s+n)/2*Math.PI/180),0.1);
+  return L.latLngBounds([s-dLat,w-dLon],[n+dLat,e+dLon]);
+}
+/* Every layer the app can draw, in one job. Only practical because the
+   pre-rendered services now go six at a time; the Maine-hosted ones stay at two
+   and are still the slow part, and the circuit breaker keeps a bad day for that
+   service from becoming a long one for you. */
+$('cAll').onclick=()=>{
+  const all=Object.values(bases).concat([contours]);
+  const b=parcelBounds(600);
+  const est=all.reduce((t,L)=>t+(L===bases['Historical']
+    ? HIST.reduce((u,h)=>u+countTiles(b,L,15,19,h.nz),0)
+    : countTiles(b,L,15,19)),0);
+  if(!confirm('Cache all '+all.length+' layers over the parcel and 600 ft around it?\n\n'
+    +'About '+est+' tiles. The LiDAR, contour and historical layers are drawn on demand by '
+    +'the state server, so those are slow and some may fail — run it again later to fill gaps.')) return;
+  cacheLayers(all, b, 15, 19, true);
+};
+$('cSave').onclick=()=>cacheLayers([curBase].concat(map.hasLayer(contours)?[contours]:[]));
+
+function countTiles(b, L, zLo, zHi, natOverride){
+  const nat=natOverride||L.options.maxNativeZoom||L.options.maxZoom||19;
+  let t=0;
+  for(let z=Math.min(zLo,nat); z<=Math.min(zHi,nat); z++){
+    const n=Math.pow(2,z);
+    const x1=Math.floor((b.getWest()+180)/360*n), x2=Math.floor((b.getEast()+180)/360*n);
+    const yOf=la=>Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*n);
+    t+=(x2-x1+1)*(yOf(b.getSouth())-yOf(b.getNorth())+1);
+  }
+  return t;
+}
+
+async function cacheLayers(layers, bounds, zLo, zHi, allYears){
   if(!db) return toast('Storage unavailable');
   /* Anchor the range to what this layer can actually serve. USGS tops out at
      z16, so standing at z18 the old range was for(z=18; z<=16) — it never ran,
      and reported "Cached 0 tiles" behind a full progress bar. */
-  const b=map.getBounds();
+  const b=bounds||map.getBounds();
   /* Contours come from a different service under a different cache key, so
      caching the basemap alone left them blank in the woods -- the one place
      they are worth having. Each layer gets its own zoom ceiling. */
-  const layers=[curBase]; if(map.hasLayer(contours)) layers.push(contours);
   const jobs=[];
   for(const L of layers){
-    const nat=L.options.maxNativeZoom||L.options.maxZoom||19;
-    const z0=Math.min(Math.max(map.getZoom(),14), nat);
-    const zmax=Math.min(z0+3, nat);
-    for(let z=z0; z<=zmax; z++){
-      const n=Math.pow(2,z);
-      const x1=Math.floor((b.getWest()+180)/360*n), x2=Math.floor((b.getEast()+180)/360*n);
-      const yOf=la=>Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*n);
-      const y1=yOf(b.getNorth()), y2=yOf(b.getSouth());
-      for(let x=x1;x<=x2;x++) for(let y=y1;y<=y2;y++) jobs.push({L,x,y,z});
+    /* Historical is one layer wearing nine faces: getTileUrl and getCacheId both
+       read histIdx. So the year is pinned while the jobs are built and the URL
+       and key are frozen into each job -- leaving that to the workers would have
+       them all reading whichever year happened to be selected when they ran.
+       The zoom ceiling is per year too: a 1998 city flight holds detail to z19
+       where a 1910 quad stops at z17, and taking the selected year's ceiling for
+       all nine would have quietly cached the sharp ones at the blunt one's. */
+    const years=(L===bases['Historical'] && allYears)?HIST.map((h,i)=>i):[null];
+    for(const yr of years){
+      const keep=histIdx; if(yr!=null) histIdx=yr;
+      const nat=(yr!=null?HIST[yr].nz:(L.options.maxNativeZoom||L.options.maxZoom||19));
+      const z0=Math.min(zLo!=null?zLo:Math.max(map.getZoom(),14), nat);
+      const zmax=Math.min(zHi!=null?zHi:z0+3, nat);
+      const cid=L.getCacheId?L.getCacheId():L.options.cacheId;
+      for(let z=z0; z<=zmax; z++){
+        const n=Math.pow(2,z);
+        const x1=Math.floor((b.getWest()+180)/360*n), x2=Math.floor((b.getEast()+180)/360*n);
+        const yOf=la=>Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*n);
+        const y1=yOf(b.getNorth()), y2=yOf(b.getSouth());
+        for(let x=x1;x<=x2;x++) for(let y=y1;y<=y2;y++){
+          const url=tileUrlAt(L,{x,y,z});
+          let host='?'; try{ host=new URL(url).hostname; }catch(e){}
+          jobs.push({L,x,y,z,url,host,key:cid+'/'+z+'/'+x+'/'+y});
+        }
+      }
+      histIdx=keep;
     }
   }
-  if(jobs.length>3000) return toast('Zoom in — that area is too large ('+jobs.length+' tiles)');
+  /* The ceiling exists so a stray zoom-out cannot queue a hundred thousand
+     tiles. An explicit "everything over the parcel" is a deliberate act, and it
+     is bounded by the parcel, so it gets a higher one. */
+  const cap=bounds?20000:3000;
+  if(jobs.length>cap) return toast('That is '+jobs.length+' tiles — too many. Zoom in.');
   toast('Caching '+jobs.length+' tiles…');
   /* Serial fetches for up to 3,000 tiles run for minutes; Android's screen
      timeout is 30-120 s, and a frozen page stalls the job. holdWake is shared
      with avg and trk, so release only when neither still needs it -- AUDIT.md
      records dropping a lock a live track needed. */
   holdWake(true);
-  let done=0, failed=0;
-  try{
-  for(const j of jobs){
-    const key=(j.L.getCacheId?j.L.getCacheId():j.L.options.cacheId)+'/'+j.z+'/'+j.x+'/'+j.y;
+  let done=0, failed=0, skipped=0;
+  const failedBy={}, streak={}, dead={};
+  /* A service that is down stays down for the length of a caching run. Three
+     tries and two backoffs each, across a thousand tiles, is twenty minutes
+     spent proving the same thing a thousand times -- and it reads as "the app is
+     slow" rather than "that service is refusing". Give up on a host after eight
+     consecutive failures, and say so. */
+  const DEAD_AFTER=8;
+  const work=async(j)=>{
+    if(dead[j.host]){ skipped++; done++; return; }
+    const key=j.key;
     try{
       const have=await idbGet('tiles',key);
       if(!have){
-        const r=await fetch(tileUrlAt(j.L,j),{mode:'cors'});
-        if(r.ok) await idbPut('tiles',key,await r.blob()); else failed++;
+        const bl=await fetchTile(j.url,3);
+        if(bl){ await idbPut('tiles',key,bl); streak[j.host]=0; }
+        else { failed++; failedBy[j.host]=(failedBy[j.host]||0)+1;
+               if((streak[j.host]=(streak[j.host]||0)+1)>=DEAD_AFTER) dead[j.host]=true; }
       }
-    }catch(e){ failed++; }
+    }catch(e){ failed++; failedBy[j.host]=(failedBy[j.host]||0)+1;
+               if((streak[j.host]=(streak[j.host]||0)+1)>=DEAD_AFTER) dead[j.host]=true; }
     done++;
-    if(done%10===0){ $('cBar').style.width=(done/jobs.length*100)+'%'; await new Promise(r=>setTimeout(r,0)); }
-  }
+    if(done%8===0){ $('cBar').style.width=(done/jobs.length*100)+'%'; await new Promise(r=>setTimeout(r,0)); }
+  };
+  try{
+    /* Grouped by host, not by layer: contours and a historical year both come
+       from the same rendering service, and giving each its own allowance would
+       put twice the agreed load on the one host that cannot take it. */
+    const byHost=new Map();
+    for(const j of jobs){
+      if(!byHost.has(j.host)) byHost.set(j.host,[]);
+      byHost.get(j.host).push(j);
+    }
+    await Promise.all([...byHost].map(([h,list])=>pool(list, hostLimit(list[0].url), work)));
   } finally { if(!avg.on&&!trk.on) holdWake(false); }
   $('cBar').style.width='100%';
   /* Same trip, same reason: an elevation grid you can only read with signal is
@@ -2052,9 +2201,15 @@ $('cSave').onclick=async()=>{
     toast('Ground sampled: '+g.cols+'×'+g.rows+' points');
   }catch(e){ toast('Ground sampling failed — tiles are still cached'); }
   cacheStats();
-  toast('Cached '+(done-failed)+' tiles'+(failed?' ('+failed+' failed)':''));
+  /* Naming the host that failed is the difference between "some tiles didn't
+     download" and "the state's render service was busy, try that layer again". */
+  const why=Object.entries(failedBy).map(([h,n])=>n+' from '+h).join(', ');
+  const gaveUp=Object.keys(dead);
+  toast('Cached '+(done-failed-skipped)+' tiles'
+    +(failed?' · '+failed+' failed: '+why:'')
+    +(skipped?' · gave up on '+gaveUp.join(', ')+', '+skipped+' skipped — try that layer again later':''));
   setTimeout(()=>{$('cBar').style.width='0';},1500);
-};
+}
 $('cWipe').onclick=async()=>{ await idbClear('tiles'); cacheStats(); toast('Tile cache cleared'); };
 
 /* ══════════════════════════════════════════════════════════════

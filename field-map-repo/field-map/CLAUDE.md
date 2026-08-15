@@ -280,6 +280,19 @@ make the output differ by platform.
 - **Tile cache has no eviction.** "Clear cache" is manual, and the nine
   historical years each cache separately (`getCacheId()` carries the year), so
   caching several of them multiplies the storage.
+- **`gis.maine.gov` renders every tile on demand and falls over.** It serves 11
+  of the 16 cacheable layers — the hillshade, the contours and all nine
+  historical years — and sits behind an ArcGIS Web Adaptor that returns a 500
+  "Application Error" page when busy. That page carries **no CORS headers**, so
+  the browser cannot see the 500 at all and `fetch` rejects with "Failed to
+  fetch": a service having a bad minute is indistinguishable from having no
+  signal. Measured one minute apart from one machine: Esri 12/12 tiles while
+  Maine returned 0/12, then recovered on its own. Hence `HOST_LIMITS` caps that
+  host at 2 connections while the pre-rendered services get 6, `fetchTile()`
+  retries 5xx/429/thrown with backoff but never a 404, and the caching run gives
+  up on a host after 8 consecutive failures rather than proving the same thing a
+  thousand times. **Do not raise its concurrency to make caching faster** —
+  flooding it is what causes the failures.
 - **One elevation grid, replaced not merged.** "Cache this view" samples the
   ground over the current bounds and overwrites the previous grid, so caching a
   second area loses the first. Outside it the readout says so rather than
