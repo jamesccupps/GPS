@@ -2139,6 +2139,7 @@ async function cacheLayers(layers, bounds, zLo, zHi, allYears){
      caching the basemap alone left them blank in the woods -- the one place
      they are worth having. Each layer gets its own zoom ceiling. */
   const jobs=[];
+  let bundled=0;
   for(const L of layers){
     /* Historical is one layer wearing nine faces: getTileUrl and getCacheId both
        read histIdx. So the year is pinned while the jobs are built and the URL
@@ -2169,6 +2170,12 @@ async function cacheLayers(layers, bounds, zLo, zHi, allYears){
         const x1=Math.floor((b.getWest()+180)/360*n), x2=Math.floor((b.getEast()+180)/360*n);
         const yOf=la=>Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*n);
         const y1=yOf(b.getNorth()), y2=yOf(b.getSouth());
+        /* Anything already inside the APK is not worth a second copy. Without
+           this, "Cache every layer" re-downloaded the eleven hundred tiles the
+           build ships with -- a long wait for bytes already on the phone, ending
+           in a toast dominated by whatever the render server failed to give. */
+        const pk=PACK&&PACK[cid];
+        if(pk && z>=pk.zMin && z<=pk.zMax){ bundled+=(x2-x1+1)*(y2-y1+1); continue; }
         for(let x=x1;x<=x2;x++) for(let y=y1;y<=y2;y++){
           const url=tileUrlAt(L,{x,y,z});
           let host='?'; try{ host=new URL(url).hostname; }catch(e){}
@@ -2183,6 +2190,9 @@ async function cacheLayers(layers, bounds, zLo, zHi, allYears){
      is bounded by the parcel, so it gets a higher one. */
   const cap=bounds?20000:3000;
   if(jobs.length>cap) return toast('That is '+jobs.length+' tiles — too many. Zoom in.');
+  if(!jobs.length) return toast(bundled
+    ? 'Nothing to fetch — all '+bundled+' tiles for this view already ship with the app'
+    : 'Nothing to cache for this view');
   toast('Caching '+jobs.length+' tiles…');
   /* Serial fetches for up to 3,000 tiles run for minutes; Android's screen
      timeout is 30-120 s, and a frozen page stalls the job. holdWake is shared
@@ -2239,8 +2249,9 @@ async function cacheLayers(layers, bounds, zLo, zHi, allYears){
   const why=Object.entries(failedBy).map(([h,n])=>n+' from '+h).join(', ');
   const gaveUp=Object.keys(dead);
   toast('Cached '+(done-failed-skipped)+' tiles'
+    +(bundled?' · '+bundled+' already in the app':'')
     +(failed?' · '+failed+' failed: '+why:'')
-    +(skipped?' · gave up on '+gaveUp.join(', ')+', '+skipped+' skipped — try that layer again later':''));
+    +(skipped?' · gave up on '+gaveUp.join(', ')+', '+skipped+' skipped — that service is down, not the app':''));
   setTimeout(()=>{$('cBar').style.width='0';},1500);
 }
 $('cWipe').onclick=async()=>{ await idbClear('tiles'); cacheStats(); toast('Tile cache cleared'); };
