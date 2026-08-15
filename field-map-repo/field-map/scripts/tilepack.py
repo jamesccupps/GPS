@@ -165,17 +165,24 @@ def limit_for(host):
 
 
 _lock = threading.Lock()
-_stat = {"got": 0, "had": 0, "failed": 0, "bytes": 0}
+_stat = {"got": 0, "had": 0, "failed": 0, "bytes": 0, "skipped": 0}
+# A host that is down stays down for the length of a run. Nine hundred tiles x
+# three tries x two backoffs is most of an hour spent proving the same thing over
+# and over, and CI does not need to learn it that thoroughly. Give up on a host
+# after this many consecutive failures; the next run resumes from the cache.
+DEAD_AFTER = 12
+_streak = {}
+_dead = set()
 
 
-def fetch(url, tries=3):
+def fetch(url, tries=2):
     """Bytes and content-type, or (None, None). 5xx and timeouts are retried;
     a 404 is not going to improve by asking again."""
     wait = 1.0
     for i in range(tries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "field-map-tilepack/1"})
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=20) as r:
                 ct = r.headers.get("Content-Type", "")
                 if not ct.startswith("image/"):
                     return None, None
@@ -216,20 +223,31 @@ def run(only, dry):
 
     def work(job):
         cid, z, x, y, url = job
+        host = host_of(url)
         d = OUT / cid / str(z) / str(x)
         for ext in (".png", ".jpg"):
             if (d / f"{y}{ext}").exists():
                 with _lock:
                     _stat["had"] += 1
                 return
+        with _lock:
+            if host in _dead:
+                _stat["skipped"] += 1
+                return
         body, ct = fetch(url)
         if not body:
             with _lock:
                 _stat["failed"] += 1
+                _streak[host] = _streak.get(host, 0) + 1
+                if _streak[host] >= DEAD_AFTER and host not in _dead:
+                    _dead.add(host)
+                    print(f"  giving up on {host} after {DEAD_AFTER} consecutive "
+                          f"failures - rerun later to fill it in", flush=True)
             return
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{y}{ext_for(ct)}").write_bytes(body)
         with _lock:
+            _streak[host] = 0
             _stat["got"] += 1
             _stat["bytes"] += len(body)
             done = _stat["got"] + _stat["had"] + _stat["failed"]
@@ -247,7 +265,9 @@ def run(only, dry):
 
     write_manifest()
     print(f"got {_stat['got']}, already had {_stat['had']}, failed {_stat['failed']}, "
-          f"{_stat['bytes']/1048576:.1f} MB fetched")
+          f"skipped {_stat['skipped']}, {_stat['bytes']/1048576:.1f} MB fetched")
+    if _dead:
+        print(f"unreachable this run: {', '.join(sorted(_dead))}")
     gh = os.environ.get("GITHUB_OUTPUT")
     if gh:
         with open(gh, "a", encoding="utf-8") as f:
