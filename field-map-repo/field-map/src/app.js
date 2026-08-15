@@ -2086,8 +2086,9 @@ $('cAll').onclick=()=>{
   const b=parcelBounds(600);
   const est=all.reduce((t,L)=>t+(L===bases['Historical']
     ? HIST.reduce((u,h)=>u+countTiles(b,L,15,19,h.nz),0)
-    : countTiles(b,L,15,19)),0);
-  if(!confirm('Cache all '+all.length+' layers over the parcel and 600 ft around it?\n\n'
+    : countTiles(b,L,15,19)*(L===bases['LiDAR hillshade']?6:1)),0);
+  if(!confirm('Cache every layer over the parcel and 600 ft around it, including all '
+    +HIST.length+' historical years and all six LiDAR sun angles at the current exaggeration?\n\n'
     +'About '+est+' tiles. The LiDAR, contour and historical layers are drawn on demand by '
     +'the state server, so those are slow and some may fail — run it again later to fill gaps.')) return;
   cacheLayers(all, b, 15, 19, true);
@@ -2125,8 +2126,18 @@ async function cacheLayers(layers, bounds, zLo, zHi, allYears){
        where a 1910 quad stops at z17, and taking the selected year's ceiling for
        all nine would have quietly cached the sharp ones at the blunt one's. */
     const years=(L===bases['Historical'] && allYears)?HIST.map((h,i)=>i):[null];
-    for(const yr of years){
+    /* The hillshade caches under hs_<mode>_<az>_<alt>_<z>, so every sun angle is
+       a different cache -- which is the whole point of the sun buttons: a wall
+       only shows when the light rakes across it. Caching the selected shade alone
+       left the other five to be fetched in the woods, where they cannot be. */
+    const shades=(L===bases['LiDAR hillshade'] && allYears)
+      ? [{mode:'hill',az:45},{mode:'hill',az:135},{mode:'hill',az:315},
+         {mode:'hill',az:270},{mode:'multi'},{mode:'slope'}]
+      : [null];
+    for(const yr of years) for(const sh0 of shades){
       const keep=histIdx; if(yr!=null) histIdx=yr;
+      const keepMode=hsOpt.mode, keepAz=hsOpt.az;
+      if(sh0){ hsOpt.mode=sh0.mode; if(sh0.az!=null) hsOpt.az=sh0.az; }
       const nat=(yr!=null?HIST[yr].nz:(L.options.maxNativeZoom||L.options.maxZoom||19));
       const z0=Math.min(zLo!=null?zLo:Math.max(map.getZoom(),14), nat);
       const zmax=Math.min(zHi!=null?zHi:z0+3, nat);
@@ -2142,7 +2153,7 @@ async function cacheLayers(layers, bounds, zLo, zHi, allYears){
           jobs.push({L,x,y,z,url,host,key:cid+'/'+z+'/'+x+'/'+y});
         }
       }
-      histIdx=keep;
+      histIdx=keep; hsOpt.mode=keepMode; hsOpt.az=keepAz;
     }
   }
   /* The ceiling exists so a stray zoom-out cannot queue a hundred thousand
